@@ -1,0 +1,381 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    background-color: #f5f5f5;
+    color: #333;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+/* 头部样式 */
+header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.logo i {
+    color: #ff3852;
+    font-size: 2rem;
+    margin-right: 10px;
+}
+
+header h1 {
+    color: #333;
+    font-size: 1.8rem;
+}
+
+.subtitle {
+    color: #666;
+    font-size: 1rem;
+    margin-bottom: 15px;
+}
+
+.actions {
+    display: flex;
+    gap: 10px;
+}
+
+.actions button {
+    background: none;
+    border: none;
+    padding: 5px 15px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #666;
+}
+
+.actions button.active {
+    background-color: #f0f0f0;
+    color: #333;
+    font-weight: bold;
+}
+
+/* 主内容区域 */
+main {
+    display: flex;
+    flex: 1;
+    gap: 20px;
+    background-color: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    overflow: hidden;
+}
+
+/* 左侧面板 */
+.left-panel {
+    flex: 0 0 350px;
+    border-right: 1px solid #eee;
+    display: flex;
+    flex-direction: column;
+}
+
+.platform-tabs {
+    display: flex;
+    border-bottom: 1px solid #eee;
+    padding: 10px;
+}
+
+.platform-tab {
+    background: none;
+    border: none;
+    padding: 8px 15px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #666;
+    border-radius: 5px;
+    margin-right: 5px;
+}
+
+.platform-tab.active {
+    color: #ff3852;
+    font-weight: bold;
+    background-color: #fff0f0;
+}
+
+.refresh-btn {
+    margin-left: auto;
+    background: none;
+    border: none;
+    padding: 8px 15px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #666;
+    border-radius: 5px;
+}
+
+.refresh-btn:hover {
+    background-color: #f5f5f5;
+}
+
+.hot-list {
+    flex: 1;
+    overflow-y: auto;
+}
+
+#hot-news-list {
+    list-style: none;
+}
+
+.hot-item {
+    padding: 15px;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+}
+
+.hot-item:hover {
+    background-color: #f9f9f9;
+}
+
+.hot-item.active {
+    background-color: #f9f9f9;
+}
+
+.hot-rank {
+    font-weight: bold;
+    font-size: 1.1rem;
+    margin-right: 12px;
+    color: #999;
+    width: 25px;
+    text-align: center;
+}
+
+.hot-rank.top1, .hot-rank.top2, .hot-rank.top3 {
+    color: #fff;
+    background-color: #ff3852;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+.hot-rank.top2 {
+    background-color: #ff9500;
+}
+
+.hot-rank.top3 {
+    background-color: #ffcc00;
+}
+
+.hot-title {
+    flex: 1;
+    font-size: 0.95rem;
+}
+
+.hot-heat {
+    font-size: 0.8rem;
+    color: #999;
+    white-space: nowrap;
+}
+
+/* 右侧面板 */
+.right-panel {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.content-preview h2 {
+    font-size: 1.2rem;
+    color: #333;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 300px;
+    color: #999;
+    font-size: 1.1rem;
+    background-color: #f9f9f9;
+    border-radius: 10px;
+}
+
+.news-content {
+    padding-bottom: 30px;
+}
+
+.author-info {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.avatar {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background-color: #ff3852;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    margin-right: 15px;
+}
+
+.author-meta h3 {
+    font-size: 1rem;
+    margin-bottom: 5px;
+}
+
+.author-meta p {
+    font-size: 0.8rem;
+    color: #999;
+}
+
+.content-title {
+    font-size: 1.8rem;
+    margin-bottom: 20px;
+    line-height: 1.4;
+    font-weight: bold;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px 0;
+    color: #666;
+    font-size: 1rem;
+}
+
+.ai-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.text-content {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: #333;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+.text-content p {
+    margin-bottom: 15px;
+}
+
+.text-content p:first-child {
+    font-weight: bold;
+    color: #ff3852;
+}
+
+.image-container {
+    width: 100%;
+    border-radius: 10px;
+    overflow: hidden;
+    background-color: #f9f9f9;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 300px;
+    position: relative;
+    margin-top: 20px;
+}
+
+.image-container::before {
+    content: "图片生成中...";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #999;
+    display: block;
+}
+
+.image-container:not(:empty)::before,
+.image-container.loaded::before {
+    display: none;
+}
+
+.image-container.error::before {
+    content: "图片加载失败，请稍后再试";
+}
+
+footer {
+    text-align: center;
+    margin-top: 30px;
+    padding-top: 20px;
+    color: #999;
+    font-size: 0.9rem;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    main {
+        flex-direction: column;
+    }
+    
+    .left-panel {
+        flex: none;
+        border-right: none;
+        border-bottom: 1px solid #eee;
+    }
+    
+    .platform-tabs {
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+}
+
+/* 加载状态样式 */
+.loading-list {
+    text-align: center;
+    padding: 20px;
+    color: #999;
+    font-size: 0.9rem;
+}
+
+/* AI生成内容样式增强 */
+.text-content {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: #333;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+.text-content p {
+    margin-bottom: 15px;
+}
+
+.text-content p:first-child {
+    font-weight: bold;
+    color: #ff3852;
+} 

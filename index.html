@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>今日热搜榜</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <i class="fas fa-fire-alt"></i>
+                <h1>今日热搜榜</h1>
+            </div>
+            <p class="subtitle">选择一条热搜，AI将为您生成</p>
+            <div class="actions">
+                <button id="to-text" class="active">图文</button>
+            </div>
+        </header>
+        
+        <main>
+            <div class="left-panel">
+                <div class="platform-tabs">
+                    <button class="platform-tab active" data-platform="weibo">
+                        <i class="fab fa-weibo"></i> 微博
+                    </button>
+                    <button class="platform-tab" data-platform="toutiao">
+                        <span>头条</span>
+                    </button>
+                    <button class="platform-tab" data-platform="baidu">
+                        <span>百度</span>
+                    </button>
+                    <button class="refresh-btn">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+                
+                <div class="hot-list">
+                    <ul id="hot-news-list">
+                        <!-- 热搜列表将通过JavaScript动态生成 -->
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="right-panel">
+                <div class="content-preview">
+                    <h2>图文预览</h2>
+                    
+                    <div class="content-area" id="content-area">
+                        <div class="placeholder">
+                            <p>👈 请从左侧选择一条热搜</p>
+                        </div>
+                        <div class="news-content" id="news-content" style="display: none;">
+                            <div class="author-info">
+                                <div class="avatar">
+                                    <span>AI</span>
+                                </div>
+                                <div class="author-meta">
+                                    <h3>作者</h3>
+                                    <p>刚刚发布·</p>
+                                </div>
+                            </div>
+                            
+                            <h2 id="news-title" class="content-title"></h2>
+                            
+                            <div class="loading" id="loading">生成中...</div>
+                            
+                            <div class="ai-content" id="ai-content">
+                                <div class="text-content" id="text-content"></div>
+                                <div class="image-container" id="image-container"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <footer>
+            <p>© 2023 今日热搜榜 - AI智能图文生成</p>
+        </footer>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html> 
