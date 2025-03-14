@@ -48,7 +48,11 @@ console.log('启动服务器...');
 console.log('静态文件目录:', path.join(__dirname, 'public'));
 
 // 提供静态文件
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    index: 'index.html',
+    extensions: ['html'],
+    maxAge: '1d' // 添加缓存控制
+}));
 
 // 添加一个测试路由
 app.get('/test', (req, res) => {
@@ -282,20 +286,9 @@ app.post('/api/generate-content', async (req, res) => {
     }
 });
 
-// 修改通配符路由，添加调试信息
+// 确保SPA路由处理正确
 app.get('*', (req, res) => {
-    console.log('请求路径:', req.path);
-    const indexPath = path.join(__dirname, 'public', 'index.html');
-    console.log('尝试提供文件:', indexPath);
-    
-    // 检查文件是否存在
-    if (require('fs').existsSync(indexPath)) {
-        console.log('文件存在，发送文件');
-        res.sendFile(indexPath);
-    } else {
-        console.log('文件不存在');
-        res.status(404).send('找不到文件 index.html');
-    }
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // 启动服务器

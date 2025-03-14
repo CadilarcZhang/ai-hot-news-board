@@ -15,9 +15,6 @@
                 <h1>今日热搜榜</h1>
             </div>
             <p class="subtitle">选择一条热搜，AI将为您生成</p>
-            <div class="actions">
-                <button id="to-text" class="active">图文</button>
-            </div>
         </header>
         
         <main>
@@ -45,33 +42,40 @@
             </div>
             
             <div class="right-panel">
-                <div class="content-preview">
-                    <h2>图文预览</h2>
-                    
-                    <div class="content-area" id="content-area">
-                        <div class="placeholder">
-                            <p>👈 请从左侧选择一条热搜</p>
-                        </div>
-                        <div class="news-content" id="news-content" style="display: none;">
-                            <div class="author-info">
-                                <div class="avatar">
-                                    <span>AI</span>
-                                </div>
-                                <div class="author-meta">
-                                    <h3>作者</h3>
-                                    <p>刚刚发布·</p>
-                                </div>
+                <div class="content-area" id="content-area">
+                    <div class="placeholder">
+                        <p>👈 请从左侧选择一条热搜</p>
+                    </div>
+                    <div class="news-content" id="news-content" style="display: none;">
+                        <div class="author-info">
+                            <div class="avatar">
+                                <span>AI</span>
                             </div>
-                            
-                            <h2 id="news-title" class="content-title"></h2>
-                            
-                            <div class="loading" id="loading">生成中...</div>
-                            
-                            <div class="ai-content" id="ai-content">
-                                <div class="text-content" id="text-content"></div>
-                                <div class="image-container" id="image-container"></div>
+                            <div class="author-meta">
+                                <h3>作者</h3>
+                                <p>刚刚发布·</p>
                             </div>
                         </div>
+                        
+                        <h2 id="news-title" class="content-title"></h2>
+                        
+                        <div class="loading" id="loading">生成中...</div>
+                        
+                        <div class="ai-content" id="ai-content">
+                            <div class="text-content" id="text-content"></div>
+                            <div class="image-container" id="image-container"></div>
+                        </div>
+                    </div>
+                    <div class="share-buttons">
+                        <button class="share-btn" id="copy-link">
+                            <i class="fas fa-link"></i> 复制链接
+                        </button>
+                        <button class="share-btn" id="share-weibo">
+                            <i class="fab fa-weibo"></i> 分享到微博
+                        </button>
+                        <button class="share-btn" id="share-wechat">
+                            <i class="fab fa-weixin"></i> 分享到微信
+                        </button>
                     </div>
                 </div>
             </div>

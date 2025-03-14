@@ -145,233 +145,124 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 使用流式API生成内容
     async function generateAIContent(title) {
+        const contentContainer = document.getElementById('text-content');
+        const loadingElement = document.getElementById('loading');
+        const aiContent = document.getElementById('ai-content');
+        
+        // 显示加载状态
+        loadingElement.style.display = 'flex';
+        contentContainer.innerHTML = '';
+        
         try {
-            // 创建一个容器用于存储内容
-            const contentContainer = document.getElementById('text-content');
+            // 使用更快的流式处理
+            const response = await fetch(`/api/generate-content`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ title })
+            });
             
-            // 立即显示一个加载动画和初始提示，减少用户等待感
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let fullContent = '';
+            aiContent.style.display = 'block';
+            
+            // 隐藏加载状态，准备显示内容
+            loadingElement.style.display = 'none';
+            
+            // 创建一个临时容器，用于累积内容
+            const tempContainer = document.createElement('div');
+            tempContainer.className = 'ai-text-content';
+            contentContainer.appendChild(tempContainer);
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) {
+                    break;
+                }
+                
+                buffer += decoder.decode(value, { stream: true });
+                
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop() || '';
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.substring(6));
+                            
+                            if (data.content) {
+                                fullContent += data.content;
+                                
+                                // 更新显示，使用更高效的方式
+                                const formattedContent = formatContent(fullContent);
+                                tempContainer.innerHTML = formattedContent;
+                                
+                                // 自动滚动到底部，提高用户体验
+                                tempContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                            }
+                            
+                            if (data.done) {
+                                // 完成后的最终格式化
+                                const formattedContent = formatContent(fullContent);
+                                tempContainer.innerHTML = formattedContent;
+                                return fullContent;
+                            }
+                        } catch (e) {
+                            console.error('解析错误:', e);
+                        }
+                    }
+                }
+            }
+            
+            return fullContent;
+        } catch (error) {
+            console.error('生成内容失败:', error);
+            loadingElement.style.display = 'none';
+            
+            // 显示错误信息
             contentContainer.innerHTML = `
-                <div class="typing-indicator">
-                    <p>AI正在快速生成内容<span class="dot-animation">...</span></p>
-                    <div class="typing-dots">
-                        <span></span><span></span><span></span>
-                    </div>
+                <div class="error-container">
+                    <div class="error-icon">⚠️</div>
+                    <p class="error-message">生成内容时出错</p>
+                    <p class="error-action">请稍后再试或选择其他热搜话题</p>
+                    <button class="retry-button" onclick="generateAIContent('${title}')">重试</button>
                 </div>
             `;
             
-            // 添加一个超时处理
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('请求超时')), 25000); // 减少超时时间
-            });
-            
-            // 使用Promise.race来处理超时
-            return Promise.race([
-                new Promise((resolve, reject) => {
-                    let fullContent = '';
-                    let isFirstChunk = true;
-                    let hasReceivedContent = false;
-                    let isDone = false;
-                    let retryCount = 0;
-                    const maxRetries = 1; // 减少重试次数，加快响应
-                    
-                    function attemptFetch() {
-                        // 使用fetch发送POST请求
-                        fetch(`${SERVER_URL}/api/generate-content`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({ title: title })
-                        })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error(`HTTP error! status: ${response.status}`);
-                            }
-                            
-                            const reader = response.body.getReader();
-                            const decoder = new TextDecoder();
-                            let buffer = '';
-                            
-                            function readStream() {
-                                reader.read().then(({ done, value }) => {
-                                    if (done) {
-                                        // 如果没有收到任何内容，显示重试信息或友好提示
-                                        if (!hasReceivedContent) {
-                                            if (retryCount < maxRetries) {
-                                                retryCount++;
-                                                contentContainer.innerHTML = `
-                                                    <div class="retry-indicator">
-                                                        <p>正在重试 (${retryCount}/${maxRetries})<span class="dot-animation">...</span></p>
-                                                        <div class="loading-spinner"></div>
-                                                    </div>
-                                                `;
-                                                setTimeout(attemptFetch, 1000);
-                                            } else {
-                                                const errorContent = `<p>很抱歉，我们无法生成关于"${title}"的内容。</p><p>服务器可能暂时繁忙，请稍后再试。</p>`;
-                                                contentContainer.innerHTML = errorContent;
-                                                resolve(errorContent);
-                                            }
-                                        } else {
-                                            // 确保内容完整显示
-                                            const formattedContent = formatContent(fullContent);
-                                            contentContainer.innerHTML = formattedContent;
-                                            resolve(formattedContent);
-                                        }
-                                        return;
-                                    }
-                                    
-                                    const chunk = decoder.decode(value, { stream: true });
-                                    buffer += chunk;
-                                    
-                                    // 处理缓冲区中的所有完整事件
-                                    const lines = buffer.split('\n\n');
-                                    buffer = lines.pop() || ''; // 保留最后一个不完整的行
-                                    
-                                    for (const line of lines) {
-                                        if (line.startsWith('data: ')) {
-                                            try {
-                                                const data = JSON.parse(line.substring(6));
-                                                
-                                                if (data.error) {
-                                                    console.error('服务器错误:', data.error);
-                                                    continue; // 继续处理，不中断
-                                                }
-                                                
-                                                if (data.content) {
-                                                    hasReceivedContent = true;
-                                                    
-                                                    // 如果是第一个内容块，并且内容是"正在思考中..."，则不添加到fullContent
-                                                    if (isFirstChunk && data.content === "正在思考中...") {
-                                                        isFirstChunk = false;
-                                                        continue;
-                                                    }
-                                                    
-                                                    // 移除加载动画，显示实际内容
-                                                    if (isFirstChunk) {
-                                                        contentContainer.innerHTML = '';
-                                                        isFirstChunk = false;
-                                                    }
-                                                    
-                                                    fullContent += data.content;
-                                                    
-                                                    // 更新显示，确保内容实时显示
-                                                    const formattedContent = formatContent(fullContent);
-                                                    contentContainer.innerHTML = formattedContent;
-                                                    
-                                                    // 滚动到底部，确保用户看到最新内容
-                                                    const contentArea = document.getElementById('content-area');
-                                                    contentArea.scrollTop = contentArea.scrollHeight;
-                                                }
-                                                
-                                                if (data.done) {
-                                                    isDone = true;
-                                                    // 如果没有收到任何实际内容，显示友好提示
-                                                    if (!hasReceivedContent || fullContent.trim() === '') {
-                                                        const errorContent = `<p>很抱歉，我们无法生成关于"${title}"的内容。</p><p>服务器可能暂时繁忙，请稍后再试。</p>`;
-                                                        contentContainer.innerHTML = errorContent;
-                                                        resolve(errorContent);
-                                                    } else {
-                                                        // 确保内容完整显示
-                                                        const formattedContent = formatContent(fullContent);
-                                                        contentContainer.innerHTML = formattedContent;
-                                                        resolve(formattedContent);
-                                                    }
-                                                    return;
-                                                }
-                                            } catch (e) {
-                                                // 忽略解析错误，继续处理
-                                                console.log('解析错误:', e, 'Line:', line);
-                                            }
-                                        }
-                                    }
-                                    
-                                    // 继续读取流
-                                    readStream();
-                                }).catch(error => {
-                                    console.error('流读取错误:', error);
-                                    // 如果已经收到了一些内容，就显示已收到的内容
-                                    if (hasReceivedContent) {
-                                        const formattedContent = formatContent(fullContent);
-                                        contentContainer.innerHTML = formattedContent;
-                                        resolve(formattedContent);
-                                    } else if (retryCount < maxRetries) {
-                                        retryCount++;
-                                        contentContainer.innerHTML = `
-                                            <div class="retry-indicator">
-                                                <p>正在重试 (${retryCount}/${maxRetries})<span class="dot-animation">...</span></p>
-                                                <div class="loading-spinner"></div>
-                                            </div>
-                                        `;
-                                        setTimeout(attemptFetch, 1000);
-                                    } else {
-                                        // 否则显示友好的错误信息
-                                        const errorContent = `<p>很抱歉，我们无法生成关于"${title}"的内容。</p><p>服务器可能暂时繁忙，请稍后再试。</p>`;
-                                        contentContainer.innerHTML = errorContent;
-                                        resolve(errorContent);
-                                    }
-                                });
-                            }
-                            
-                            // 开始读取流
-                            readStream();
-                        })
-                        .catch(error => {
-                            console.error('请求错误:', error);
-                            if (retryCount < maxRetries) {
-                                retryCount++;
-                                contentContainer.innerHTML = `
-                                    <div class="retry-indicator">
-                                        <p>正在重试 (${retryCount}/${maxRetries})<span class="dot-animation">...</span></p>
-                                        <div class="loading-spinner"></div>
-                                    </div>
-                                `;
-                                setTimeout(attemptFetch, 1000);
-                            } else {
-                                const errorContent = `<p>很抱歉，我们无法生成关于"${title}"的内容。</p><p>服务器可能暂时繁忙，请稍后再试。</p>`;
-                                contentContainer.innerHTML = errorContent;
-                                resolve(errorContent);
-                            }
-                        });
-                    }
-                    
-                    // 开始第一次尝试
-                    attemptFetch();
-                }),
-                timeoutPromise
-            ]).catch(error => {
-                console.error('生成内容失败:', error);
-                const errorContent = `<p>很抱歉，请求超时。</p><p>我们的服务器可能正在处理大量请求，请稍后再试。</p>`;
-                contentContainer.innerHTML = errorContent;
-                return errorContent;
-            });
-        } catch (error) {
-            console.error('AI内容生成失败:', error);
-            const errorContent = `<p>很抱歉，发生了意外错误。</p><p>请刷新页面重试。</p>`;
-            return errorContent;
+            throw error;
         }
     }
     
     // 格式化内容为HTML
     function formatContent(text) {
         if (!text || !text.trim()) {
-            return '<p>正在思考中...</p>';
+            return '<p>正在生成内容...</p>';
         }
         
-        // 将文本按段落分割并包装在<p>标签中
-        // 首先尝试按双换行符分割
-        let paragraphs = text.split('\n\n').filter(p => p.trim());
+        // 使用更高效的方式分割段落
+        const paragraphs = text.split('\n\n').length > 1 
+            ? text.split('\n\n') 
+            : text.split('\n');
         
-        if (paragraphs.length <= 1) {
-            // 如果没有明确的双换行符，尝试按单换行符分割
-            paragraphs = text.split('\n').filter(p => p.trim());
-        }
-        
-        if (paragraphs.length === 0) {
-            // 如果仍然没有段落，就把整个文本作为一个段落
-            return `<p>${text}</p>`;
-        }
-        
-        return paragraphs.map(p => `<p>${p}</p>`).join('');
+        // 过滤空段落并格式化
+        return paragraphs
+            .filter(p => p.trim())
+            .map((p, i) => {
+                // 为第一段添加特殊样式
+                if (i === 0) {
+                    return `<p class="first-paragraph">${p}</p>`;
+                }
+                return `<p>${p}</p>`;
+            })
+            .join('');
     }
     
     // 显示新闻内容
@@ -394,7 +285,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 显示加载中，隐藏内容
         loading.style.display = 'block';
-        aiContent.style.display = 'block'; // 显示内容区域，以便流式显示
+        aiContent.style.display = 'none'; // 显示内容区域，以便流式显示
         
         // 清空之前的内容
         imageContainer.innerHTML = '';
@@ -418,7 +309,7 @@ document.addEventListener('DOMContentLoaded', function() {
         imageContainer.innerHTML = `
             <svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
                 <rect width="100%" height="100%" fill="#f5f5f5"/>
-                <rect x="50" y="50" width="700" height="350" fill="${colors[news.id] || '#ff3852'}" opacity="0.1"/>
+                <rect width="100%" height="100%" fill="${colors[news.id] || '#ff3852'}" opacity="0.1"/>
                 <text x="50%" y="45%" font-family="Arial" font-size="28" fill="${colors[news.id] || '#ff3852'}" text-anchor="middle" font-weight="bold">${news.title}</text>
                 <text x="50%" y="55%" font-family="Arial" font-size="18" fill="#666" text-anchor="middle">热度: ${news.heat}</text>
             </svg>
@@ -432,6 +323,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 生成AI内容（流式输出）
         await generateAIContent(news.title);
+        
+        // 实现分享功能
+        setupShareButtons(news.title);
     }
     
     // 平台标签切换
@@ -481,4 +375,260 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 初始加载微博热搜
     fetchHotNews('weibo');
+    
+    // 改进加载状态显示
+    function showLoadingState(element, message = '加载中') {
+        element.innerHTML = `
+            <div class="loading-state">
+                <div class="loading-spinner"></div>
+                <p>${message}<span class="dot-animation">...</span></p>
+            </div>
+        `;
+    }
+    
+    // 使用骨架屏
+    function showSkeletonScreen() {
+        const contentContainer = document.getElementById('text-content');
+        contentContainer.innerHTML = `
+            <div class="skeleton-screen">
+                <div class="skeleton-line" style="width: 90%"></div>
+                <div class="skeleton-line" style="width: 80%"></div>
+                <div class="skeleton-line" style="width: 95%"></div>
+                <div class="skeleton-line" style="width: 70%"></div>
+                <div class="skeleton-line" style="width: 85%"></div>
+            </div>
+        `;
+    }
+    
+    // 统一的错误处理
+    function handleError(container, error, title = '') {
+        console.error('发生错误:', error);
+        
+        let errorMessage = '很抱歉，发生了意外错误。';
+        let actionMessage = '请刷新页面重试。';
+        
+        if (error.message === '请求超时') {
+            errorMessage = '请求超时，服务器可能正在处理大量请求。';
+            actionMessage = '请稍后再试或选择其他热搜话题。';
+        } else if (error.message && error.message.includes('网络')) {
+            errorMessage = '网络连接出现问题。';
+            actionMessage = '请检查您的网络连接并重试。';
+        } else if (title) {
+            errorMessage = `无法生成关于"${title}"的内容。`;
+            actionMessage = '服务器可能暂时繁忙，请稍后再试。';
+        }
+        
+        container.innerHTML = `
+            <div class="error-container">
+                <div class="error-icon">⚠️</div>
+                <p class="error-message">${errorMessage}</p>
+                <p class="error-action">${actionMessage}</p>
+                <button class="retry-button">重试</button>
+            </div>
+        `;
+        
+        // 添加重试按钮事件
+        const retryButton = container.querySelector('.retry-button');
+        if (retryButton && title) {
+            retryButton.addEventListener('click', () => {
+                showSkeletonScreen();
+                generateAIContent(title).catch(e => handleError(container, e, title));
+            });
+        }
+    }
+    
+    // 修复分享功能
+    function setupShareButtons(title) {
+        // 移除之前的事件监听器
+        const copyLinkBtn = document.getElementById('copy-link');
+        const shareWeiboBtn = document.getElementById('share-weibo');
+        const shareWechatBtn = document.getElementById('share-wechat');
+        
+        copyLinkBtn.replaceWith(copyLinkBtn.cloneNode(true));
+        shareWeiboBtn.replaceWith(shareWeiboBtn.cloneNode(true));
+        shareWechatBtn.replaceWith(shareWechatBtn.cloneNode(true));
+        
+        // 重新获取元素
+        const newCopyLinkBtn = document.getElementById('copy-link');
+        const newShareWeiboBtn = document.getElementById('share-weibo');
+        const newShareWechatBtn = document.getElementById('share-wechat');
+        
+        // 复制链接
+        newCopyLinkBtn.addEventListener('click', () => {
+            const url = `${window.location.origin}?title=${encodeURIComponent(title)}`;
+            navigator.clipboard.writeText(url)
+                .then(() => showToast('链接已复制到剪贴板'))
+                .catch(() => showToast('复制失败，请手动复制'));
+        });
+        
+        // 分享到微博
+        newShareWeiboBtn.addEventListener('click', () => {
+            const url = `https://service.weibo.com/share/share.php?url=${encodeURIComponent(window.location.href)}&title=${encodeURIComponent('AI解读热搜：' + title)}`;
+            window.open(url, '_blank');
+        });
+        
+        // 分享到微信（显示二维码）
+        newShareWechatBtn.addEventListener('click', () => {
+            showQRCode(window.location.href);
+        });
+    }
+    
+    // 显示提示消息
+    function showToast(message) {
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        
+        setTimeout(() => {
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }, 10);
+    }
+    
+    // 添加二维码显示功能
+    function showQRCode(url) {
+        // 创建遮罩层
+        const overlay = document.createElement('div');
+        overlay.className = 'qrcode-overlay';
+        
+        // 创建二维码容器
+        const container = document.createElement('div');
+        container.className = 'qrcode-container';
+        
+        // 添加标题
+        const title = document.createElement('h3');
+        title.textContent = '微信扫码分享';
+        container.appendChild(title);
+        
+        // 添加二维码图片（使用外部服务生成）
+        const qrImage = document.createElement('img');
+        qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`;
+        qrImage.alt = '分享二维码';
+        container.appendChild(qrImage);
+        
+        // 添加提示文字
+        const hint = document.createElement('p');
+        hint.textContent = '打开微信扫一扫，扫描上方二维码即可分享';
+        container.appendChild(hint);
+        
+        // 添加关闭按钮
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'qrcode-close';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.addEventListener('click', () => {
+            document.body.removeChild(overlay);
+        });
+        container.appendChild(closeBtn);
+        
+        // 将容器添加到遮罩层
+        overlay.appendChild(container);
+        
+        // 点击遮罩层关闭
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                document.body.removeChild(overlay);
+            }
+        });
+        
+        // 添加到页面
+        document.body.appendChild(overlay);
+    }
+    
+    // 添加二维码样式
+    const qrcodeStyle = document.createElement('style');
+    qrcodeStyle.textContent = `
+        .qrcode-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .qrcode-container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            position: relative;
+            max-width: 90%;
+        }
+        
+        .qrcode-container h3 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        
+        .qrcode-container img {
+            max-width: 200px;
+            height: auto;
+            margin-bottom: 20px;
+        }
+        
+        .qrcode-container p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .qrcode-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #999;
+        }
+        
+        .qrcode-close:hover {
+            color: #333;
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            .qrcode-container {
+                background-color: #2a2a2a;
+            }
+            
+            .qrcode-container h3 {
+                color: #e0e0e0;
+            }
+            
+            .qrcode-container p {
+                color: #aaa;
+            }
+            
+            .qrcode-close:hover {
+                color: #e0e0e0;
+            }
+        }
+    `;
+    document.head.appendChild(qrcodeStyle);
+    
+    // 移除多余的调试元素
+    const debugElements = document.querySelectorAll('[style*="border: 1px solid red"], [style*="border:1px solid red"]');
+    debugElements.forEach(el => {
+        el.style.border = 'none';
+        // 如果元素是空的，完全移除它
+        if (!el.innerText.trim() && !el.querySelector('img') && !el.classList.contains('loading')) {
+            el.style.display = 'none';
+        }
+    });
+    
+    // 检查并移除空的内容容器
+    const emptyContainers = document.querySelectorAll('.content-area > div:empty');
+    emptyContainers.forEach(el => {
+        if (!el.classList.contains('loading') && !el.classList.contains('placeholder')) {
+            el.style.display = 'none';
+        }
+    });
 }); 
