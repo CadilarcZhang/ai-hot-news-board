@@ -62,8 +62,8 @@ app.get('/api/hot-news', async (req, res) => {
             case 'toutiao':
                 endpoint = 'toutiaohot';
                 break;
-            case 'baidu':
-                endpoint = 'nethot';
+            case 'douyin':
+                endpoint = 'douyinhot';
                 break;
             default:
                 endpoint = 'weibohot';
@@ -82,28 +82,6 @@ app.get('/api/hot-news', async (req, res) => {
         res.status(500).json({ error: '获取热搜数据失败', message: error.message });
     }
 });
-
-// 预生成的常见热搜回复
-const preGeneratedResponses = {
-    "西安交大通报副教授论文全文抄袭": `
-<p>🔥 #西安交大副教授论文全文抄袭# 爆出的瞬间，学术圈的瓜粉们直接炸了锅！这位副教授在国际期刊上发表的论文被扒出**全文抄袭**，西安交大连夜通报：停职、撤销职称、追回待遇！这波处理速度和狠度直接让网友喊话"学术打假不能手软"！👏</p>
-
-<p>据教育部统计，2022年高校学术不端处理案件同比增加23%，而论文抄袭占比超过60%！更可怕的是，**近5年高校被撤稿论文中，37%涉及抄袭**（数据来源：中国科技论文统计报告）。这些数字背后反映的是学术圈的诚信危机，也是对真正踏实做研究学者的不尊重。😓</p>
-
-<p>从社会影响来看，学术不端行为严重损害了我国科研声誉和国际形象。每一篇抄袭论文被发现，都会让国际学术界对中国学者的整体印象大打折扣。同时，这种行为也扭曲了学术评价体系，让"发表数量"凌驾于"研究质量"之上，进一步加剧了学术界的浮躁风气。🤔</p>
-
-<p>值得思考的是，为什么这种明显的抄袭行为能"蒙混过关"到被发表？背后暴露的学术监管漏洞可不是一个"离谱"能概括的呢～这次事件也给我们敲响警钟：学术诚信不仅是个人品德问题，更是关乎国家科研实力和学术声誉的大事！希望各高校能建立更严格的学术审核机制，让学术造假者无处遁形！💪</p>
-`,
-    "国庆假期旅游总收入超9000亿元": `
-<p>🎉 #国庆假期旅游总收入超9000亿元# 这个数字简直太震撼了！8天长假，全国旅游市场火爆程度超出预期，消费热情空前高涨！💰✨</p>
-
-<p>据文旅部数据显示，今年国庆假期全国共接待国内游客8.26亿人次，同比增长4.1%；实现国内旅游收入9632.6亿元，同比增长5.6%！这些数字背后反映的是中国经济的强大韧性和内需市场的巨大潜力。从消费结构来看，高品质、深度体验型旅游成为主流，人均花费较往年明显提升。📈🧳</p>
-
-<p>从社会影响角度分析，这波旅游热潮带动了餐饮、住宿、交通、文创等多个行业全面复苏。特别是一些历史文化名城和乡村旅游目的地，游客量创下历史新高！数据显示，博物馆、非遗展示等文化场所游客同比增长超过30%，夜间经济消费增长超过25%。这种"文旅融合"的新模式，正成为拉动内需的重要引擎！🏛️🌃</p>
-
-<p>不过也要看到，部分热门景区"人从众"现象严重，"一票难求"、"一房难订"、"一座难求"的问题仍然存在。未来旅游业发展，需要更加注重分流引导和服务质量提升。作为旅游爱好者，我建议大家可以错峰出行，探索小众目的地，体验会更好哦！你们假期去哪玩了？有没有被人山人海吓到？欢迎评论区分享你的旅行故事！✈️🏞️</p>
-`
-};
 
 // 流式生成AI内容的接口
 app.post('/api/generate-content', async (req, res) => {
@@ -141,36 +119,6 @@ app.post('/api/generate-content', async (req, res) => {
                 }
                 i++;
                 setTimeout(sendNextChunk, 100); // 每100ms发送一段，加快速度
-            } else {
-                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                res.end();
-            }
-        };
-        
-        setTimeout(sendNextChunk, 100); // 快速开始发送
-        return;
-    }
-    
-    // 如果有预生成的回复，立即返回
-    if (preGeneratedResponses[title]) {
-        console.log(`使用预生成的内容: ${title}`);
-        
-        // 分段发送预生成内容，模拟流式效果
-        const content = preGeneratedResponses[title];
-        const chunks = content.split('</p>');
-        
-        // 立即发送第一段，减少用户等待感
-        res.write(`data: ${JSON.stringify({ content: chunks[0] + '</p>' })}\n\n`);
-        
-        // 模拟流式发送其余段落
-        let i = 1;
-        const sendNextChunk = () => {
-            if (i < chunks.length) {
-                if (chunks[i].trim()) {
-                    res.write(`data: ${JSON.stringify({ content: chunks[i] + '</p>' })}\n\n`);
-                }
-                i++;
-                setTimeout(sendNextChunk, 150); // 每150ms发送一段，加快速度
             } else {
                 res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
                 res.end();
@@ -304,7 +252,7 @@ app.post('/api/generate-content', async (req, res) => {
         
         console.error('AI内容生成失败:', error);
         
-        // 发送友好的错误提示
+        // 发送友好的错误提示，不再生成备用内容
         res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
         res.write(`data: ${JSON.stringify({ content: "我们的系统遇到了一些技术问题，请稍后再试。感谢您的理解和耐心。" })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
