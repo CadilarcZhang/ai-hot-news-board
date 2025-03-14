@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -29,9 +30,30 @@ const simpleCache = {
     }
 };
 
-// 启用CORS
-app.use(cors());
+// 配置CORS，只允许特定来源访问API
+const corsOptions = {
+    origin: ['http://localhost:3001', 'http://127.0.0.1:3001'],
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+// 仅对API路由应用CORS
+app.use('/api', cors(corsOptions));
+
+// 解析JSON请求体
 app.use(express.json());
+
+// 显示调试信息
+console.log('启动服务器...');
+console.log('静态文件目录:', path.join(__dirname, 'public'));
+
+// 提供静态文件
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 添加一个测试路由
+app.get('/test', (req, res) => {
+    res.send('服务器正在运行');
+});
 
 // 天行API密钥
 const TIANAPI_KEY = 'eb50731204ecb974aa2fcc8f22478f42';
@@ -260,7 +282,24 @@ app.post('/api/generate-content', async (req, res) => {
     }
 });
 
+// 修改通配符路由，添加调试信息
+app.get('*', (req, res) => {
+    console.log('请求路径:', req.path);
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    console.log('尝试提供文件:', indexPath);
+    
+    // 检查文件是否存在
+    if (require('fs').existsSync(indexPath)) {
+        console.log('文件存在，发送文件');
+        res.sendFile(indexPath);
+    } else {
+        console.log('文件不存在');
+        res.status(404).send('找不到文件 index.html');
+    }
+});
+
 // 启动服务器
 app.listen(PORT, () => {
     console.log(`服务器运行在 http://localhost:${PORT}`);
+    console.log(`尝试访问 http://localhost:${PORT}/index.html`);
 }); 
