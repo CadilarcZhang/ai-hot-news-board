@@ -30,15 +30,12 @@ const simpleCache = {
     }
 };
 
-// 配置CORS，只允许特定来源访问API
-const corsOptions = {
-    origin: ['http://localhost:3001', 'http://127.0.0.1:3001'],
-    methods: ['GET', 'POST'],
+// 配置CORS，允许所有来源访问API
+app.use('/api', cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
-};
-
-// 仅对API路由应用CORS
-app.use('/api', cors(corsOptions));
+}));
 
 // 解析JSON请求体
 app.use(express.json());
@@ -291,8 +288,14 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// 处理OPTIONS预检请求
+app.options('/api/*', cors());
+
 // 启动服务器
 app.listen(PORT, () => {
     console.log(`服务器运行在 http://localhost:${PORT}`);
     console.log(`尝试访问 http://localhost:${PORT}/index.html`);
-}); 
+});
+
+// 确保在最后导出app以供Vercel使用
+module.exports = app; 

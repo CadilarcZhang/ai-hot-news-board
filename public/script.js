@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // Node.js服务器地址
-    const SERVER_URL = 'http://localhost:3001';
+    const SERVER_URL = ''; // 使用相对路径，而不是 'http://localhost:3001'
     
     // 当前选中的平台
     let currentPlatform = 'weibo';
