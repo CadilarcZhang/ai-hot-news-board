@@ -620,11 +620,18 @@ body.dark-mode .left-panel {
 }
 
 body.dark-mode .hot-item {
-    border-bottom-color: #333;
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #444;
+}
+
+body.dark-mode .hot-item.active {
+    background-color: #444;
+    border-left-color: #ff6b81;
 }
 
 body.dark-mode .hot-item:hover {
-    background-color: #333;
+    background-color: #3a3a3a;
 }
 
 body.dark-mode .hot-title {
@@ -632,8 +639,9 @@ body.dark-mode .hot-title {
 }
 
 body.dark-mode .content-area {
-    background-color: #222;
-    box-shadow: 0 2px 15px rgba(0, 0, 0, 0.3);
+    background-color: #2a2a2a;
+    color: #e0e0e0;
+    border-color: #444;
 }
 
 body.dark-mode .content-title {
@@ -649,7 +657,7 @@ body.dark-mode .author-meta p {
 }
 
 body.dark-mode .author-info {
-    border-bottom-color: #333;
+    background-color: #333;
 }
 
 body.dark-mode .text-content {
@@ -663,21 +671,25 @@ body.dark-mode .image-container {
 }
 
 body.dark-mode .share-btn {
-    background-color: #333;
+    background-color: #444;
     color: #e0e0e0;
+    border-color: #555;
 }
 
 body.dark-mode .share-btn:hover {
-    background-color: #444;
+    background-color: #555;
 }
 
 body.dark-mode .platform-tab {
+    background-color: #333;
     color: #ccc;
+    border-color: #444;
 }
 
 body.dark-mode .platform-tab.active {
-    background-color: #333;
+    background-color: #444;
     color: #ff6b81;
+    border-bottom-color: #ff6b81;
 }
 
 body.dark-mode .refresh-btn {
@@ -883,4 +895,44 @@ body.dark-mode {
 
 .image-container.dark-mode {
     background-color: #333;
+}
+
+/* 暗黑模式下的新闻内容样式 */
+body.dark-mode .news-content {
+    background-color: #333;
+    color: #e0e0e0;
+}
+
+/* 暗黑模式下的作者信息样式 */
+body.dark-mode .author-info {
+    background-color: #333;
+}
+
+body.dark-mode .author-meta h3,
+body.dark-mode .author-meta p {
+    color: #e0e0e0;
+}
+
+/* 暗黑模式下的加载状态样式 */
+body.dark-mode .loading {
+    background-color: #333;
+    color: #ccc;
+}
+
+/* 暗黑模式下的错误容器样式 */
+body.dark-mode .error-container {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #444;
+}
+
+/* 暗黑模式下的重试按钮样式 */
+body.dark-mode .retry-button {
+    background-color: #444;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .retry-button:hover {
+    background-color: #555;
 }

@@ -9,8 +9,11 @@ document.addEventListener('DOMContentLoaded', function() {
         el.textContent = `刚刚发布 · ${dateStr}`;
     });
     
+    // 获取基础路径
+    const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
+    
     // Node.js服务器地址
-    const SERVER_URL = ''; // 使用相对路径，而不是 'http://localhost:3001'
+    const SERVER_URL = BASE_PATH; // 使用相对路径，包含基础路径
     
     // 当前选中的平台
     let currentPlatform = 'weibo';
@@ -153,24 +156,9 @@ document.addEventListener('DOMContentLoaded', function() {
         loadingElement.style.display = 'flex';
         contentContainer.innerHTML = '';
         
-        // 添加超时处理
-        let timeoutId = setTimeout(() => {
-            if (loadingElement.style.display === 'flex') {
-                contentContainer.innerHTML = `
-                    <div class="error-container">
-                        <div class="error-icon">⏱️</div>
-                        <p class="error-message">请求超时</p>
-                        <p class="error-action">AI服务可能暂时繁忙，请稍后再试</p>
-                        <button class="retry-button" onclick="generateAIContent('${title}')">重试</button>
-                    </div>
-                `;
-                loadingElement.style.display = 'none';
-            }
-        }, 15000); // 15秒超时
-        
         try {
             // 使用更快的流式处理
-            const response = await fetch(`/api/generate-content`, {
+            const response = await fetch(`${SERVER_URL}/api/generate-content`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -182,16 +170,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             
-            // 清除超时
-            clearTimeout(timeoutId);
-            
-            // 处理流式响应
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
             let fullContent = '';
+            aiContent.style.display = 'block';
             
+            // 隐藏加载状态，准备显示内容
             loadingElement.style.display = 'none';
+            
+            // 创建一个临时容器，用于累积内容
+            const tempContainer = document.createElement('div');
+            tempContainer.className = 'ai-text-content';
+            contentContainer.appendChild(tempContainer);
             
             while (true) {
                 const { done, value } = await reader.read();
@@ -200,11 +191,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     break;
                 }
                 
-                // 解码新的数据块
-                const chunk = decoder.decode(value, { stream: true });
-                buffer += chunk;
+                buffer += decoder.decode(value, { stream: true });
                 
-                // 处理缓冲区中的所有完整事件
                 const lines = buffer.split('\n\n');
                 buffer = lines.pop() || '';
                 
@@ -215,33 +203,32 @@ document.addEventListener('DOMContentLoaded', function() {
                             
                             if (data.content) {
                                 fullContent += data.content;
-                                contentContainer.innerHTML = formatContent(fullContent);
+                                
+                                // 更新显示，使用更高效的方式
+                                const formattedContent = formatContent(fullContent);
+                                tempContainer.innerHTML = formattedContent;
+                                
+                                // 自动滚动到底部，提高用户体验
+                                tempContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
                             }
                             
                             if (data.done) {
-                                break;
-                            }
-                            
-                            if (data.error) {
-                                throw new Error(data.error);
+                                // 完成后的最终格式化
+                                const formattedContent = formatContent(fullContent);
+                                tempContainer.innerHTML = formattedContent;
+                                return fullContent;
                             }
                         } catch (e) {
-                            console.log('解析错误:', e);
+                            console.error('解析错误:', e);
                         }
                     }
                 }
+
             }
             
-            // 如果内容为空，显示错误
-            if (!fullContent.trim()) {
-                throw new Error('生成的内容为空');
-            }
-            
+            return fullContent;
         } catch (error) {
-            // 清除超时
-            clearTimeout(timeoutId);
-            
-            console.error('生成内容时出错:', error);
+            console.error('生成内容失败:', error);
             loadingElement.style.display = 'none';
             
             // 显示错误信息
@@ -253,6 +240,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     <button class="retry-button" onclick="generateAIContent('${title}')">重试</button>
                 </div>
             `;
+            
+            throw error;
         }
     }
     
