@@ -106,6 +106,20 @@ app.get('/api/hot-news', async (req, res) => {
     }
 });
 
+// 备用内容生成函数
+function generateFallbackContent(title) {
+    const templates = [
+        `🔥 "${title}"登上热搜！这个话题引发了广泛讨论，网友们纷纷表示关注。有人支持，有人反对，各种观点碰撞出不同的火花。你怎么看这个热门话题呢？`,
+        `📱 "${title}"冲上热搜榜！这条热搜背后有什么故事？是突发事件还是持续关注的话题？无论如何，它已经成为今日网络讨论的焦点。`,
+        `👀 "${title}"引发热议！这个话题为何如此受关注？可能是因为它触动了大众的某个敏感神经，也可能只是一个有趣的社会现象。`,
+        `💬 "${title}"成为今日热点！网友们对此议论纷纷，各种观点和角度让这个话题更加立体。你有什么想法要分享吗？`,
+        `🌟 "${title}"突然爆红！这个话题之所以能登上热搜，或许是因为它反映了当下的社会热点，或者触及了人们共同的情感共鸣。`
+    ];
+    
+    // 随机选择一个模板
+    return templates[Math.floor(Math.random() * templates.length)];
+}
+
 // 流式生成AI内容的接口
 app.post('/api/generate-content', async (req, res) => {
     const { title } = req.body;
@@ -119,49 +133,15 @@ app.post('/api/generate-content', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     
-    // 检查缓存中是否有该标题的内容
-    const cacheKey = `content-${title}`;
-    const cachedContent = simpleCache.get(cacheKey);
-    
-    // 如果有缓存内容，直接返回
-    if (cachedContent) {
-        console.log(`从缓存获取内容: ${title}`);
-        
-        // 分段发送缓存内容，模拟流式效果
-        const chunks = cachedContent.split('\n');
-        
-        // 立即发送第一段，减少用户等待感
-        res.write(`data: ${JSON.stringify({ content: chunks[0] })}\n\n`);
-        
-        // 模拟流式发送其余段落
-        let i = 1;
-        const sendNextChunk = () => {
-            if (i < chunks.length) {
-                if (chunks[i].trim()) {
-                    res.write(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
-                }
-                i++;
-                setTimeout(sendNextChunk, 100); // 每100ms发送一段，加快速度
-            } else {
-                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                res.end();
-            }
-        };
-        
-        setTimeout(sendNextChunk, 100); // 快速开始发送
-        return;
-    }
-    
-    // 设置请求超时
+    // 设置超时处理
     const timeout = setTimeout(() => {
-        res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务器响应超时。🕒\n\n" })}\n\n`);
-        res.write(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
+        res.write(`data: ${JSON.stringify({ content: "\n\n请求超时，请稍后再试... 🕒\n\n" })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
-    }, 15000); // 减少超时时间到15秒
+    }, 8000); // 设置8秒超时，低于Vercel的10秒限制
     
     try {
-        // 创建AI API请求
+        // 创建AI API请求，添加超时设置
         const response = await axios({
             method: 'post',
             url: 'https://api.siliconflow.cn/v1/chat/completions',
@@ -174,57 +154,41 @@ app.post('/api/generate-content', async (req, res) => {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "你是一位热搜解读专家，请直接生成一段生动有趣的解读，包含表情符号，语气活泼，像社交媒体博主的风格。内容要有深度，至少包含3-4个段落，每个段落至少3-4句话。要包含一些数据分析、社会影响和个人观点。不要有思考过程，直接给出最终内容。"
+                        "content": "你是一位热搜解读专家，请根据热搜标题生成一段简短生动的解读，包含表情符号，语气活泼。回答控制在100字以内。"
                     },
                     {
                         "role": "user",
-                        "content": `请直接解读这条热搜：${title}，内容要丰富，必须包含表情符号，分析社会影响。不要有思考过程，直接给出最终内容。`
+                        "content": `请简短解读这条热搜：${title}`
                     }
                 ],
                 "stream": true,
-                // 不限制token数量，确保内容完整
-                "temperature": 0.7, // 降低温度，使生成更确定性
-                "top_p": 0.95,
+                "max_tokens": 200, // 减少token数量
+                "temperature": 0.7,
+                "top_p": 0.7,
                 "response_format": {
                     "type": "text"
                 }
             },
             responseType: 'stream',
-            timeout: 20000 // 减少请求超时时间
+            timeout: 7000 // 设置axios超时为7秒
         });
         
         // 清除超时计时器
         clearTimeout(timeout);
         
-        let isCompleted = false;
-        let buffer = '';
-        let fullContent = ''; // 用于缓存完整内容
-        
         // 处理流式响应
         response.data.on('data', (chunk) => {
-            buffer += chunk.toString();
-            
-            // 尝试处理缓冲区中的所有完整行
-            let newlineIndex;
-            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-                const line = buffer.slice(0, newlineIndex).trim();
-                buffer = buffer.slice(newlineIndex + 1);
-                
-                if (!line) continue;
+            const lines = chunk.toString().split('\n');
+            for (const line of lines) {
+                if (line.trim() === '') continue;
                 
                 if (line.startsWith('data: ')) {
                     const data = line.substring(6);
                     
                     if (data === '[DONE]') {
-                        isCompleted = true;
-                        
-                        // 缓存生成的完整内容
-                        if (fullContent.trim().length > 100) { // 只缓存有意义的内容
-                            simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
-                        }
-                        
-                        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                        continue;
+                        res.write('data: [DONE]\n\n');
+                        res.end();
+                        return;
                     }
                     
                     try {
@@ -235,36 +199,23 @@ app.post('/api/generate-content', async (req, res) => {
                             parsed.choices[0].delta.content) {
                             
                             const content = parsed.choices[0].delta.content;
-                            fullContent += content; // 累积完整内容
                             res.write(`data: ${JSON.stringify({ content })}\n\n`);
                         }
                     } catch (e) {
-                        console.error('解析JSON出错:', e, 'Line:', data);
-                        // 继续处理，不中断
+                        console.error('解析JSON出错:', e);
                     }
                 }
             }
         });
         
         response.data.on('end', () => {
-            // 如果没有正常完成，发送完成信号
-            if (!isCompleted) {
-                // 缓存生成的完整内容
-                if (fullContent.trim().length > 100) { // 只缓存有意义的内容
-                    simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
-                }
-                
-                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            }
+            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
             res.end();
         });
         
         response.data.on('error', (err) => {
             console.error('流处理错误:', err);
-            
-            // 如果出错，发送友好提示
-            res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时繁忙。🔄\n\n" })}\n\n`);
-            res.write(`data: ${JSON.stringify({ content: "我们的AI助手正在处理大量请求，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
+            res.write(`data: ${JSON.stringify({ content: "\n\n生成内容时出错，请稍后再试... ⚠️\n\n" })}\n\n`);
             res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
             res.end();
         });
@@ -274,10 +225,8 @@ app.post('/api/generate-content', async (req, res) => {
         clearTimeout(timeout);
         
         console.error('AI内容生成失败:', error);
-        
-        // 发送友好的错误提示，不再生成备用内容
-        res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
-        res.write(`data: ${JSON.stringify({ content: "我们的系统遇到了一些技术问题，请稍后再试。感谢您的理解和耐心。" })}\n\n`);
+        res.write(`data: ${JSON.stringify({ content: "\n\n生成内容时出错，请稍后再试... ⚠️\n\n" })}\n\n`);
+        res.write(`data: ${JSON.stringify({ content: "可能是AI服务暂时不可用，请稍后再尝试。" })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
     }
