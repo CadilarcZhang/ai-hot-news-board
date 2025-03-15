@@ -705,7 +705,7 @@ body.dark-mode .placeholder {
 .share-buttons {
     display: flex;
     gap: 12px;
-    /* margin-top: 20px; */
+    margin-top: 20px;
     flex-wrap: wrap;
     padding: 0 35px 30px;
 }
