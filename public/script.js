@@ -631,4 +631,47 @@ document.addEventListener('DOMContentLoaded', function() {
             el.style.display = 'none';
         }
     });
+    
+    // 主题切换按钮逻辑
+    const themeToggleBtn = document.getElementById('theme-toggle');
+    
+    // 检查本地存储中的主题设置
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') {
+        document.body.classList.add('dark-mode');
+        applyDarkMode(true);
+    }
+    
+    // 添加点击事件
+    themeToggleBtn.addEventListener('click', function() {
+        document.body.classList.toggle('dark-mode');
+        
+        // 更新所有需要暗黑模式的元素
+        const isDarkMode = document.body.classList.contains('dark-mode');
+        applyDarkMode(isDarkMode);
+        
+        // 保存主题设置到本地存储
+        localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+    });
+    
+    // 应用深色模式到所有元素
+    function applyDarkMode(isDarkMode) {
+        const elements = [
+            '.content-area', '.news-content', '.placeholder', 
+            '.image-container', 'header', 'main', '.left-panel', 
+            '.hot-item', '.platform-tab', '.text-content',
+            '.author-info', '.author-meta', '.share-btn',
+            '.loading', '.error-container'
+        ];
+        
+        elements.forEach(selector => {
+            document.querySelectorAll(selector).forEach(el => {
+                if (isDarkMode) {
+                    el.classList.add('dark-mode');
+                } else {
+                    el.classList.remove('dark-mode');
+                }
+            });
+        });
+    }
 }); 

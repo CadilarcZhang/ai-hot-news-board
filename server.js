@@ -1,9 +1,11 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 
 // 创建简单的内存缓存对象
 const simpleCache = {
@@ -295,4 +297,7 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
     console.log(`服务器运行在 http://localhost:${PORT}`);
     console.log(`尝试访问 http://localhost:${PORT}/index.html`);
-}); 
+});
+
+// 确保在最后导出app以供Vercel使用
+module.exports = app; 
