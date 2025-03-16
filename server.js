@@ -312,6 +312,58 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
     }
 });
 
+// 图片生成API
+app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
+    try {
+        const { prompt, title } = req.body;
+        
+        if (!prompt) {
+            return res.status(400).json({ error: '提示词不能为空' });
+        }
+        
+        // 检查缓存中是否有该标题的图片
+        const cacheKey = `image-${title}`;
+        const cachedImage = simpleCache.get(cacheKey);
+        
+        if (cachedImage) {
+            console.log(`从缓存获取图片: ${title}`);
+            return res.json({ image: cachedImage });
+        }
+        
+        // 调用图片生成API
+        const response = await axios({
+            method: 'post',
+            url: 'https://api.siliconflow.cn/v1/images/generations',
+            headers: {
+                'Authorization': `Bearer ${AI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            data: {
+                "model": "Kwai-Kolors/Kolors",
+                "prompt": prompt,
+                "negative_prompt": "低质量，模糊，变形，文字，水印",
+                "image_size": "1024x1024",
+                "batch_size": 1,
+                "seed": Math.floor(Math.random() * 1000000),
+                "num_inference_steps": 20,
+                "guidance_scale": 7.5
+            },
+            timeout: 30000 // 30秒超时，避免长时间等待
+        });
+        
+        // 获取生成的图片URL
+        const imageUrl = response.data.data[0].url;
+        
+        // 缓存图片URL
+        simpleCache.set(cacheKey, imageUrl, 3600 * 24); // 缓存24小时
+        
+        res.json({ image: imageUrl });
+    } catch (error) {
+        console.error('图片生成失败:', error);
+        res.status(500).json({ error: '图片生成失败', message: error.message });
+    }
+});
+
 // 确保SPA路由处理正确
 app.get(`${BASE_PATH}/*`, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));

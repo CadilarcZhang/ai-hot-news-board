@@ -93,6 +93,8 @@ main {
     border-right: 1px solid #eee;
     display: flex;
     flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
 }
 
 .platform-tabs {
@@ -201,7 +203,7 @@ main {
 /* 右侧面板 */
 .right-panel {
     flex: 1;
-    padding: 20px 25px;
+    padding: 0 25px;
     overflow-y: auto;
 }
 
@@ -349,15 +351,10 @@ main {
     width: 100%;
     border-radius: 12px;
     overflow: hidden;
-    background-color: #f0f0f0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 300px;
-    position: relative;
     margin-top: 20px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-    border: 1px solid #ddd;
+    margin-bottom: 30px;
+    min-height: 450px;
+    display: block;
 }
 
 .image-container::before {
@@ -932,4 +929,85 @@ body.dark-mode .retry-button {
 
 body.dark-mode .retry-button:hover {
     background-color: #555;
+}
+
+/* 图片加载状态 */
+.image-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    width: 100%;
+    background-color: #2a2a2a;
+    color: #aaa;
+    font-size: 1rem;
+    border-radius: 12px;
+    position: relative;
+    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    min-height: 450px;
+}
+
+/* 移除图片图标 */
+.image-loading::before {
+    content: "图片生成中...";
+    font-size: 1.2rem;
+    margin-bottom: 60px;
+    opacity: 0.8;
+}
+
+.image-loading::after {
+    content: "";
+    display: block;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 56, 82, 0.2);
+    border-top-color: #ff3852;
+    animation: spin 1.2s cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
+    position: absolute;
+    top: calc(50% - 25px);
+    left: calc(50% - 25px);
+}
+
+/* 添加背景动画效果 */
+.image-loading {
+    background: linear-gradient(120deg, #2a2a2a 30%, #333 38%, #2a2a2a 48%);
+    background-size: 200% 100%;
+    animation: loading-background 2s ease infinite;
+}
+
+@keyframes loading-background {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0 50%; }
+}
+
+/* 亮色模式下的图片加载状态 */
+body:not(.dark-mode) .image-loading {
+    background-color: #f0f0f0;
+    color: #666;
+    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.05);
+    background: linear-gradient(120deg, #f0f0f0 30%, #f5f5f5 38%, #f0f0f0 48%);
+    background-size: 200% 100%;
+}
+
+body:not(.dark-mode) .image-loading::after {
+    border: 3px solid rgba(255, 56, 82, 0.1);
+    border-top-color: #ff3852;
+}
+
+/* 生成的图片样式 */
+.generated-image {
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    display: block;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.generated-image:hover {
+    transform: scale(1.01);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }

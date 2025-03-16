@@ -183,13 +183,20 @@ document.addEventListener('DOMContentLoaded', function() {
         const imageContainer = newsContent.querySelector('.image-container');
         const loadingElement = newsContent.querySelector('.loading');
         const aiContent = newsContent.querySelector('.ai-content');
+        const hotItem = document.querySelector(`.hot-item[data-id="${newsId}"]`);
+        const heat = hotItem ? hotItem.querySelector('.hot-heat').textContent : '热度未知';
         
         // 显示加载状态
         loadingElement.style.display = 'flex';
+        // imageContainer.style.display = 'none';
         contentContainer.innerHTML = '';
         
         // 清空图片容器
         imageContainer.innerHTML = '';
+        imageContainer.innerHTML = '<div class="image-loading"></div>';
+        let fullContent = '';
+        
+        generateImageForContent(newsId, title, fullContent, heat);
         
         // 关闭之前的EventSource连接（如果存在）
         if (eventSources[newsId]) {
@@ -202,7 +209,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const eventSource = new EventSource(`${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`);
             eventSources[newsId] = eventSource;
             
-            let fullContent = '';
             aiContent.style.display = 'none';
             
             eventSource.onopen = (evt) => {
@@ -221,8 +227,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     if (data.done) {
-                        // 创建SVG图片
-                        createSVGImage(newsId, title, newsContent.querySelector('.hot-heat'));
+                        // 先显示SVG图片作为占位符
+                        // 获取热度信息，从列表项中获取
+                        // const hotItem = document.querySelector(`.hot-item[data-id="${newsId}"]`);
+                        // const heat = hotItem ? hotItem.querySelector('.hot-heat').textContent : '热度未知';
+                        
+                        // createSVGImage(newsId, title, heat);
+
+                        // 然后尝试生成真实图片
+                        // generateImageForContent(newsId, title, fullContent, heat);
                         
                         if (eventSources[newsId]) {
                             eventSources[newsId].close();
@@ -248,69 +261,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         <div class="error-icon">⚠️</div>
                         <p class="error-message">生成内容时出错</p>
                         <p class="error-action">请稍后再试或选择其他热搜话题</p>
-                        <button class="retry-button" onclick="window.retryGeneration(${newsId}, '${title}')">重试</button>
+                        <button class="retry-button" onclick="window.retryGeneration('${newsId}', '${title}')">重试</button>
                     </div>
                 `;
                 loadingElement.style.display = 'none';
             };
-            
-            // 方法2: 使用Fetch API的流式处理 (如果EventSource不可用)
-            /*
-            const response = await fetch(`${SERVER_URL}/api/generate-content`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ title })
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let fullContent = '';
-            
-            loadingElement.style.display = 'none';
-            aiContent.style.display = 'block';
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                
-                if (done) {
-                    break;
-                }
-                
-                // 解码新的数据块
-                const chunk = decoder.decode(value, { stream: true });
-                buffer += chunk;
-                
-                // 处理缓冲区中的所有完整事件
-                const lines = buffer.split('\n\n');
-                buffer = lines.pop() || '';
-                
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.substring(6));
-                            
-                            if (data.content) {
-                                fullContent += data.content;
-                                contentContainer.innerHTML = formatContent(fullContent);
-                            }
-                            
-                            if (data.done) {
-                                break;
-                            }
-                        } catch (e) {
-                            console.log('解析错误:', e);
-                        }
-                    }
-                }
-            }
-            */
         } catch (error) {
             console.error(`生成内容时出错 (${newsId}):`, error);
             loadingElement.style.display = 'none';
@@ -321,16 +276,63 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="error-icon">⚠️</div>
                     <p class="error-message">生成内容时出错</p>
                     <p class="error-action">请稍后再试或选择其他热搜话题</p>
-                    <button class="retry-button" onclick="window.retryGeneration(${newsId}, '${title}')">重试</button>
+                    <button class="retry-button" onclick="window.retryGeneration('${newsId}', '${title}')">重试</button>
                 </div>
             `;
         }
     }
     
-    // 创建SVG图片
+    // 根据内容生成图片
+    function generateImageForContent(newsId, title, content, heat) {
+        const newsContent = document.getElementById(`news-${newsId}`);
+        const imageContainer = newsContent.querySelector('.image-container');
+        
+        // 提取内容的前200个字符作为提示词基础
+        // const contentSummary = content.substring(0, 200).replace(/[\n\r]/g, ' ');
+        
+        // 构建提示词，使其更具体和相关
+        // const prompt = `新闻图片，主题：${title}，内容：${contentSummary}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
+        const prompt = `新闻图片，主题：${title}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
+        
+        // 显示加载状态
+        imageContainer.innerHTML = '<div class="image-loading"></div>';
+        
+        // 调用图片生成API
+        fetch(`${SERVER_URL}/api/generate-image`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                prompt: prompt,
+                title: title
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.image) {
+                // 显示生成的图片
+                imageContainer.innerHTML = `<img src="${data.image}" alt="${title}" class="generated-image">`;
+                imageContainer.classList.add('loaded');
+            } else {
+                // 如果没有成功生成图片，保留SVG图片
+                console.log('图片生成失败，保留SVG图片');
+                createSVGImage(newsId, title, heat);
+            }
+            imageContainer.style.display = 'block';
+        })
+        .catch(error => {
+            console.error('图片生成出错:', error);
+            // 保留SVG图片作为备用
+            createSVGImage(newsId, title, heat);
+        });
+    }
+    
+    // 创建SVG图片（作为占位符）
     function createSVGImage(newsId, title, heat) {
         const newsContent = document.getElementById(`news-${newsId}`);
         const imageContainer = newsContent.querySelector('.image-container');
+        imageContainer.style.display = 'block';
         
         // 使用SVG图片，不依赖外部资源
         const colors = {
