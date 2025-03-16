@@ -126,6 +126,39 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
     const cacheKey = `content-${title}`;
     const cachedContent = simpleCache.get(cacheKey);
     
+    // 标记响应是否已结束
+    let isResponseEnded = false;
+    
+    // 安全写入函数，防止写入已关闭的流
+    const safeWrite = (data) => {
+        if (!isResponseEnded && !res.writableEnded && res.writable) {
+            try {
+                res.write(data);
+            } catch (error) {
+                console.error('写入响应时出错:', error);
+                isResponseEnded = true;
+            }
+        }
+    };
+    
+    // 安全结束函数，防止多次结束响应
+    const safeEnd = () => {
+        if (!isResponseEnded && !res.writableEnded && res.writable) {
+            try {
+                isResponseEnded = true;
+                res.end();
+            } catch (error) {
+                console.error('结束响应时出错:', error);
+            }
+        }
+    };
+    
+    // 处理客户端断开连接
+    req.on('close', () => {
+        isResponseEnded = true;
+        console.log('客户端断开连接');
+    });
+    
     // 如果有缓存内容，分段发送以模拟流式效果
     if (cachedContent) {
         console.log(`从缓存获取内容: ${title}`);
@@ -134,20 +167,20 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         const chunks = cachedContent.split('\n');
         
         // 立即发送第一段，减少用户等待感
-        res.write(`data: ${JSON.stringify({ content: chunks[0] })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ content: chunks[0] })}\n\n`);
         
         // 模拟流式发送其余段落
         let i = 1;
         const sendNextChunk = () => {
-            if (i < chunks.length) {
+            if (i < chunks.length && !isResponseEnded) {
                 if (chunks[i].trim()) {
-                    res.write(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
+                    safeWrite(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
                 }
                 i++;
                 setTimeout(sendNextChunk, 100); // 每100ms发送一段，加快速度
-            } else {
-                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                res.end();
+            } else if (!isResponseEnded) {
+                safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                safeEnd();
             }
         };
         
@@ -157,16 +190,17 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
     
     // 设置请求超时
     const timeout = setTimeout(() => {
-        res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务器响应超时。🕒\n\n" })}\n\n`);
-        res.write(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
+        if (!isResponseEnded) {
+            safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务器响应超时。🕒\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+            safeEnd();
+        }
     }, 15000); // 15秒超时
     
     try {
         // 创建AI API请求
         const response = await axios({
-        // const aiRequest = axios({
             method: 'post',
             url: 'https://api.siliconflow.cn/v1/chat/completions',
             headers: {
@@ -202,13 +236,13 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         
         let fullContent = '';
         
-        // 异步处理AI响应
-        // const response = await aiRequest;
         // 处理流式响应
         response.data.on('data', (chunk) => {
+            if (isResponseEnded) return;
+            
             const lines = chunk.toString().split('\n');
             for (const line of lines) {
-                if (line.trim() === '') continue;
+                if (line.trim() === '' || isResponseEnded) continue;
                 
                 if (line.startsWith('data: ')) {
                     const data = line.substring(6);
@@ -219,8 +253,8 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                             simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
                         }
                         
-                        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                        res.end();
+                        safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                        safeEnd();
                         return;
                     }
                     
@@ -233,10 +267,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                             
                             const content = parsed.choices[0].delta.content;
                             fullContent += content;
-                            res.write(`data: ${JSON.stringify({ content })}\n\n`);
-                            
-                            // 强制刷新缓冲区
-                            if (res.flush) res.flush();
+                            safeWrite(`data: ${JSON.stringify({ content })}\n\n`);
                         }
                     } catch (e) {
                         console.error('解析JSON出错:', e);
@@ -247,31 +278,37 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         
         response.data.on('end', () => {
             // 如果没有正常完成，发送完成信号
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            res.end();
+            if (!isResponseEnded) {
+                safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                safeEnd();
+            }
         });
         
         response.data.on('error', (err) => {
+            if (isResponseEnded) return;
+            
             console.error('流处理错误:', err);
             
             // 如果出错，发送友好提示
-            res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时繁忙。🔄\n\n" })}\n\n`);
-            res.write(`data: ${JSON.stringify({ content: "我们的AI助手正在处理大量请求，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            res.end();
+            safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时繁忙。🔄\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ content: "我们的AI助手正在处理大量请求，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+            safeEnd();
         });
         
     } catch (error) {
         // 清除超时计时器
         clearTimeout(timeout);
         
+        if (isResponseEnded) return;
+        
         console.error('AI内容生成失败:', error);
         
-        // 发送友好的错误提示，不再生成备用内容
-        res.write(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
-        res.write(`data: ${JSON.stringify({ content: "我们的系统遇到了一些技术问题，请稍后再试。感谢您的理解和耐心。" })}\n\n`);
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
+        // 发送友好的错误提示
+        safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ content: "我们的系统遇到了一些技术问题，请稍后再试。感谢您的理解和耐心。" })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+        safeEnd();
     }
 });
 
