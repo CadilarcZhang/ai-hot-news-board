@@ -17,7 +17,9 @@
       "headers": {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Accept"
+        "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Accept",
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        "X-Accel-Buffering": "no"
       }
     },
     {
@@ -31,11 +33,5 @@
       "src": "/.*",
       "dest": "/public/index.html"
     }
-  ],
-  "functions": {
-    "server.js": {
-      "memory": 1024,
-      "maxDuration": 10
-    }
-  }
+  ]
 } 
