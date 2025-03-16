@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, stream_with_context
 import requests
 import json
 import time
@@ -10,10 +10,9 @@ CORS(app)  # 启用跨域支持
 # AI API密钥
 AI_API_KEY = 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo'
 
-@app.route('/api/generate', methods=['POST'])
-def generate_content():
-    data = request.json
-    title = data.get('title', '')
+@app.route('/api/generate', methods=['GET'])
+def generate_content_sse():
+    title = request.args.get('title', '')
     
     if not title:
         return jsonify({"error": "标题不能为空"}), 400
@@ -77,7 +76,7 @@ def generate_content():
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
-    return Response(generate(), mimetype='text/event-stream')
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 @app.route('/api/hot-news', methods=['GET'])
 def get_hot_news():

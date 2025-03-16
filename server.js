@@ -108,24 +108,25 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
     }
 });
 
-// 流式生成AI内容的接口
-app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
-    const { title } = req.body;
+// 流式生成AI内容的接口 - 使用SSE (Server-Sent Events)
+app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
+    const title = req.query.title;
     
     if (!title) {
         return res.status(400).json({ error: '标题不能为空' });
     }
     
-    // 设置响应头，支持流式输出
+    // 设置SSE响应头
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // 禁用Nginx缓冲
     
     // 检查缓存中是否有该标题的内容
     const cacheKey = `content-${title}`;
     const cachedContent = simpleCache.get(cacheKey);
     
-    // 如果有缓存内容，直接返回
+    // 如果有缓存内容，分段发送以模拟流式效果
     if (cachedContent) {
         console.log(`从缓存获取内容: ${title}`);
         
@@ -160,11 +161,12 @@ app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
         res.write(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
-    }, 15000); // 减少超时时间到15秒
+    }, 15000); // 15秒超时
     
     try {
         // 创建AI API请求
         const response = await axios({
+        // const aiRequest = axios({
             method: 'post',
             url: 'https://api.siliconflow.cn/v1/chat/completions',
             headers: {
@@ -172,7 +174,7 @@ app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "Qwen/QwQ-32B",
+                "model": "deepseek-ai/DeepSeek-V3",
                 "messages": [
                     {
                         "role": "system",
@@ -184,7 +186,7 @@ app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
                     }
                 ],
                 "stream": true,
-                // 不限制token数量，确保内容完整
+                // 不限制token数量，确Q保内容完整
                 "temperature": 0.7, // 降低温度，使生成更确定性
                 "top_p": 0.95,
                 "response_format": {
@@ -192,41 +194,34 @@ app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
                 }
             },
             responseType: 'stream',
-            timeout: 20000 // 减少请求超时时间
+            timeout: 10000 // 10秒超时
         });
         
         // 清除超时计时器
         clearTimeout(timeout);
         
-        let isCompleted = false;
-        let buffer = '';
-        let fullContent = ''; // 用于缓存完整内容
+        let fullContent = '';
         
+        // 异步处理AI响应
+        // const response = await aiRequest;
         // 处理流式响应
         response.data.on('data', (chunk) => {
-            buffer += chunk.toString();
-            
-            // 尝试处理缓冲区中的所有完整行
-            let newlineIndex;
-            while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-                const line = buffer.slice(0, newlineIndex).trim();
-                buffer = buffer.slice(newlineIndex + 1);
-                
-                if (!line) continue;
+            const lines = chunk.toString().split('\n');
+            for (const line of lines) {
+                if (line.trim() === '') continue;
                 
                 if (line.startsWith('data: ')) {
                     const data = line.substring(6);
                     
                     if (data === '[DONE]') {
-                        isCompleted = true;
-                        
                         // 缓存生成的完整内容
-                        if (fullContent.trim().length > 100) { // 只缓存有意义的内容
+                        if (fullContent.trim().length > 0) {
                             simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
                         }
                         
                         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                        continue;
+                        res.end();
+                        return;
                     }
                     
                     try {
@@ -237,12 +232,14 @@ app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
                             parsed.choices[0].delta.content) {
                             
                             const content = parsed.choices[0].delta.content;
-                            fullContent += content; // 累积完整内容
+                            fullContent += content;
                             res.write(`data: ${JSON.stringify({ content })}\n\n`);
+                            
+                            // 强制刷新缓冲区
+                            if (res.flush) res.flush();
                         }
                     } catch (e) {
-                        console.error('解析JSON出错:', e, 'Line:', data);
-                        // 继续处理，不中断
+                        console.error('解析JSON出错:', e);
                     }
                 }
             }
@@ -250,14 +247,7 @@ app.post(`${BASE_PATH}/api/generate-content`, async (req, res) => {
         
         response.data.on('end', () => {
             // 如果没有正常完成，发送完成信号
-            if (!isCompleted) {
-                // 缓存生成的完整内容
-                if (fullContent.trim().length > 100) { // 只缓存有意义的内容
-                    simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
-                }
-                
-                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            }
+            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
             res.end();
         });
         
