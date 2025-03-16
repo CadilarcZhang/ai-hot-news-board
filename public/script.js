@@ -18,6 +18,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // 当前选中的平台
     let currentPlatform = 'weibo';
     
+    // 存储所有EventSource实例的映射
+    const eventSources = {};
+    
     // 获取热搜数据
     function fetchHotNews(platform = 'weibo') {
         // 显示加载状态
@@ -46,7 +49,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // 渲染热搜列表
     function renderHotNewsList(hotNews) {
         const hotNewsList = document.getElementById('hot-news-list');
+        const contentArea = document.getElementById('content-area');
+        
+        // 清空热搜列表
         hotNewsList.innerHTML = '';
+        
+        // 清空内容区域，只保留占位符
+        const placeholder = contentArea.querySelector('.placeholder');
+        contentArea.innerHTML = '';
+        contentArea.appendChild(placeholder);
+        
+        // 清除所有EventSource连接
+        Object.keys(eventSources).forEach(key => {
+            if (eventSources[key]) {
+                eventSources[key].close();
+                delete eventSources[key];
+            }
+        });
         
         hotNews.forEach((news, index) => {
             if (index >= 15) return; // 只显示前15条
@@ -67,6 +86,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 <span class="hot-heat">${heat}</span>
             `;
             
+            // 为每个热搜项创建一个内容区域
+            const newsId = `news-${index + 1}`;
+            const template = document.getElementById('news-content-template');
+            const newsContent = template.content.cloneNode(true).querySelector('.news-content');
+            
+            newsContent.id = newsId;
+            newsContent.querySelector('.content-title').textContent = `${index + 1}. ${title}`;
+            
+            // 添加到内容区域
+            contentArea.appendChild(newsContent);
+            
             li.addEventListener('click', function() {
                 // 移除其他项目的active类
                 document.querySelectorAll('.hot-item').forEach(item => {
@@ -76,7 +106,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 为当前项目添加active类
                 this.classList.add('active');
                 
-                // 显示内容区域
+                // 显示对应的内容区域
                 showNewsContent({
                     id: index + 1,
                     title: title,
@@ -147,24 +177,36 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 使用流式API生成内容
-    async function generateAIContent(title) {
-        const contentContainer = document.getElementById('text-content');
-        const loadingElement = document.getElementById('loading');
-        const aiContent = document.getElementById('ai-content');
+    function generateAIContent(newsId, title) {
+        const newsContent = document.getElementById(`news-${newsId}`);
+        const contentContainer = newsContent.querySelector('.text-content');
+        const imageContainer = newsContent.querySelector('.image-container');
+        const loadingElement = newsContent.querySelector('.loading');
+        const aiContent = newsContent.querySelector('.ai-content');
         
         // 显示加载状态
         loadingElement.style.display = 'flex';
         contentContainer.innerHTML = '';
         
+        // 清空图片容器
+        imageContainer.innerHTML = '';
+        
+        // 关闭之前的EventSource连接（如果存在）
+        if (eventSources[newsId]) {
+            eventSources[newsId].close();
+            delete eventSources[newsId];
+        }
+        
         try {
             // 方法1: 使用EventSource (SSE)
             const eventSource = new EventSource(`${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`);
+            eventSources[newsId] = eventSource;
             
             let fullContent = '';
             aiContent.style.display = 'none';
             
             eventSource.onopen = (evt) => {
-                console.log("SSE成功建立连接", evt);
+                console.log(`SSE成功建立连接 (${newsId})`, evt);
             };
             
             eventSource.onmessage = function(event) {
@@ -172,13 +214,20 @@ document.addEventListener('DOMContentLoaded', function() {
                     const data = JSON.parse(event.data);
                     loadingElement.style.display = 'none';
                     aiContent.style.display = 'block';
+                    
                     if (data.content) {
                         fullContent += data.content;
                         contentContainer.innerHTML = formatContent(fullContent);
                     }
                     
                     if (data.done) {
-                        eventSource.close();
+                        // 创建SVG图片
+                        createSVGImage(newsId, title, newsContent.querySelector('.hot-heat'));
+                        
+                        if (eventSources[newsId]) {
+                            eventSources[newsId].close();
+                            delete eventSources[newsId];
+                        }
                     }
                 } catch (e) {
                     console.error('解析事件数据出错:', e);
@@ -186,8 +235,12 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             
             eventSource.onerror = function(error) {
-                console.error('EventSource错误:', error);
-                eventSource.close();
+                console.error(`EventSource错误 (${newsId}):`, error);
+                
+                if (eventSources[newsId]) {
+                    eventSources[newsId].close();
+                    delete eventSources[newsId];
+                }
                 
                 // 显示错误信息
                 contentContainer.innerHTML = `
@@ -195,7 +248,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <div class="error-icon">⚠️</div>
                         <p class="error-message">生成内容时出错</p>
                         <p class="error-action">请稍后再试或选择其他热搜话题</p>
-                        <button class="retry-button" onclick="generateAIContent('${title}')">重试</button>
+                        <button class="retry-button" onclick="window.retryGeneration(${newsId}, '${title}')">重试</button>
                     </div>
                 `;
                 loadingElement.style.display = 'none';
@@ -259,7 +312,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             */
         } catch (error) {
-            console.error('生成内容时出错:', error);
+            console.error(`生成内容时出错 (${newsId}):`, error);
             loadingElement.style.display = 'none';
             
             // 显示错误信息
@@ -268,11 +321,49 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="error-icon">⚠️</div>
                     <p class="error-message">生成内容时出错</p>
                     <p class="error-action">请稍后再试或选择其他热搜话题</p>
-                    <button class="retry-button" onclick="generateAIContent('${title}')">重试</button>
+                    <button class="retry-button" onclick="window.retryGeneration(${newsId}, '${title}')">重试</button>
                 </div>
             `;
         }
     }
+    
+    // 创建SVG图片
+    function createSVGImage(newsId, title, heat) {
+        const newsContent = document.getElementById(`news-${newsId}`);
+        const imageContainer = newsContent.querySelector('.image-container');
+        
+        // 使用SVG图片，不依赖外部资源
+        const colors = {
+            1: "#ff3852", // 红色
+            2: "#ff9500", // 橙色
+            3: "#ffcc00", // 黄色
+            4: "#4cd964", // 绿色
+            5: "#5ac8fa", // 蓝色
+            6: "#007aff", // 深蓝色
+            7: "#5856d6", // 紫色
+            8: "#ff2d55", // 粉色
+            9: "#8e8e93", // 灰色
+            10: "#ff3b30" // 红色
+        };
+        
+        // 创建SVG图片
+        imageContainer.innerHTML = `
+            <svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100%" height="100%" fill="#f5f5f5"/>
+                <rect width="100%" height="100%" fill="${colors[newsId % 10 + 1] || '#ff3852'}" opacity="0.1"/>
+                <text x="50%" y="45%" font-family="Arial" font-size="28" fill="${colors[newsId % 10 + 1] || '#ff3852'}" text-anchor="middle" font-weight="bold">${title}</text>
+                <text x="50%" y="55%" font-family="Arial" font-size="18" fill="#666" text-anchor="middle">热度: ${heat}</text>
+            </svg>
+        `;
+        
+        // 添加一个类来隐藏加载动画
+        imageContainer.classList.add('loaded');
+    }
+    
+    // 全局重试函数
+    window.retryGeneration = function(newsId, title) {
+        generateAIContent(newsId, title);
+    };
     
     // 格式化内容为HTML
     function formatContent(text) {
@@ -299,67 +390,32 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 显示新闻内容
-    async function showNewsContent(news) {
+    function showNewsContent(news) {
         const contentArea = document.getElementById('content-area');
         const placeholder = contentArea.querySelector('.placeholder');
-        const newsContent = document.getElementById('news-content');
-        const newsTitle = document.getElementById('news-title');
-        const loading = document.getElementById('loading');
-        const aiContent = document.getElementById('ai-content');
-        const imageContainer = document.getElementById('image-container');
-        const textContent = document.getElementById('text-content');
+        const newsId = `news-${news.id}`;
+        const newsContent = document.getElementById(newsId);
         
-        // 隐藏占位符，显示内容区
+        // 隐藏所有内容区域
+        document.querySelectorAll('.news-content').forEach(content => {
+            content.style.display = 'none';
+        });
+        
+        // 隐藏占位符
         placeholder.style.display = 'none';
+        
+        // 显示当前内容区域
         newsContent.style.display = 'block';
         
-        // 设置标题
-        newsTitle.textContent = news.title;
-        
-        // 显示加载中，隐藏内容
-        loading.style.display = 'block';
-        aiContent.style.display = 'none'; // 显示内容区域，以便流式显示
-        
-        // 清空之前的内容
-        imageContainer.innerHTML = '';
-        textContent.innerHTML = '<p>AI正在思考中...</p>';
-        
-        // 使用SVG图片，不依赖外部资源
-        const colors = {
-            1: "#ff3852", // 红色
-            2: "#ff9500", // 橙色
-            3: "#ffcc00", // 黄色
-            4: "#4cd964", // 绿色
-            5: "#5ac8fa", // 蓝色
-            6: "#007aff", // 深蓝色
-            7: "#5856d6", // 紫色
-            8: "#ff2d55", // 粉色
-            9: "#8e8e93", // 灰色
-            10: "#ff3b30" // 红色
-        };
-        
-        // 创建SVG图片
-        imageContainer.innerHTML = `
-            <svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
-                <rect width="100%" height="100%" fill="#f5f5f5"/>
-                <rect width="100%" height="100%" fill="${colors[news.id] || '#ff3852'}" opacity="0.1"/>
-                <text x="50%" y="45%" font-family="Arial" font-size="28" fill="${colors[news.id] || '#ff3852'}" text-anchor="middle" font-weight="bold">${news.title}</text>
-                <text x="50%" y="55%" font-family="Arial" font-size="18" fill="#666" text-anchor="middle">热度: ${news.heat}</text>
-            </svg>
-        `;
-        
-        // 添加一个类来隐藏加载提示
-        imageContainer.classList.add('loaded');
-        
-        // 隐藏加载中提示，因为内容会流式显示
-        loading.style.display = 'none';
-        
-        // 生成AI内容（流式输出）
-        // await generateAIContent(news.title);
-        generateAIContent(news.title);
-        
-        // 实现分享功能
-        setupShareButtons(news.title);
+        // 检查是否已经生成过内容
+        const textContent = newsContent.querySelector('.text-content');
+        if (!textContent.innerHTML.trim()) {
+            // 如果没有内容，则生成
+            generateAIContent(news.id, news.title);
+        } else if (!newsContent.querySelector('.image-container').innerHTML.trim()) {
+            // 如果有内容但没有图片，生成图片
+            createSVGImage(news.id, news.title, news.heat);
+        }
     }
     
     // 平台标签切换
@@ -380,14 +436,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // 刷新按钮
     const refreshBtn = document.querySelector('.refresh-btn');
     refreshBtn.addEventListener('click', function() {
-        this.querySelector('i').classList.add('rotating');
+        const icon = this.querySelector('i');
+        icon.classList.add('rotating');
+        
         setTimeout(() => {
-            this.querySelector('i').classList.remove('rotating');
+            icon.classList.remove('rotating');
         }, 1000);
         
-        // 刷新当前平台的热搜数据
         fetchHotNews(currentPlatform);
     });
+    
+    // 初始化：获取微博热搜数据
+    fetchHotNews('weibo');
     
     // 添加CSS动画
     const style = document.createElement('style');
@@ -406,247 +466,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     `;
     document.head.appendChild(style);
-    
-    // 初始加载微博热搜
-    fetchHotNews('weibo');
-    
-    // 改进加载状态显示
-    function showLoadingState(element, message = '加载中') {
-        element.innerHTML = `
-            <div class="loading-state">
-                <div class="loading-spinner"></div>
-                <p>${message}<span class="dot-animation">...</span></p>
-            </div>
-        `;
-    }
-    
-    // 使用骨架屏
-    function showSkeletonScreen() {
-        const contentContainer = document.getElementById('text-content');
-        contentContainer.innerHTML = `
-            <div class="skeleton-screen">
-                <div class="skeleton-line" style="width: 90%"></div>
-                <div class="skeleton-line" style="width: 80%"></div>
-                <div class="skeleton-line" style="width: 95%"></div>
-                <div class="skeleton-line" style="width: 70%"></div>
-                <div class="skeleton-line" style="width: 85%"></div>
-            </div>
-        `;
-    }
-    
-    // 统一的错误处理
-    function handleError(container, error, title = '') {
-        console.error('发生错误:', error);
-        
-        let errorMessage = '很抱歉，发生了意外错误。';
-        let actionMessage = '请刷新页面重试。';
-        
-        if (error.message === '请求超时') {
-            errorMessage = '请求超时，服务器可能正在处理大量请求。';
-            actionMessage = '请稍后再试或选择其他热搜话题。';
-        } else if (error.message && error.message.includes('网络')) {
-            errorMessage = '网络连接出现问题。';
-            actionMessage = '请检查您的网络连接并重试。';
-        } else if (title) {
-            errorMessage = `无法生成关于"${title}"的内容。`;
-            actionMessage = '服务器可能暂时繁忙，请稍后再试。';
-        }
-        
-        container.innerHTML = `
-            <div class="error-container">
-                <div class="error-icon">⚠️</div>
-                <p class="error-message">${errorMessage}</p>
-                <p class="error-action">${actionMessage}</p>
-                <button class="retry-button">重试</button>
-            </div>
-        `;
-        
-        // 添加重试按钮事件
-        const retryButton = container.querySelector('.retry-button');
-        if (retryButton && title) {
-            retryButton.addEventListener('click', () => {
-                showSkeletonScreen();
-                generateAIContent(title).catch(e => handleError(container, e, title));
-            });
-        }
-    }
-    
-    // 修复分享功能
-    function setupShareButtons(title) {
-        // 移除之前的事件监听器
-        const copyLinkBtn = document.getElementById('copy-link');
-        const shareWeiboBtn = document.getElementById('share-weibo');
-        const shareWechatBtn = document.getElementById('share-wechat');
-        
-        copyLinkBtn.replaceWith(copyLinkBtn.cloneNode(true));
-        shareWeiboBtn.replaceWith(shareWeiboBtn.cloneNode(true));
-        shareWechatBtn.replaceWith(shareWechatBtn.cloneNode(true));
-        
-        // 重新获取元素
-        const newCopyLinkBtn = document.getElementById('copy-link');
-        const newShareWeiboBtn = document.getElementById('share-weibo');
-        const newShareWechatBtn = document.getElementById('share-wechat');
-        
-        // 复制链接
-        newCopyLinkBtn.addEventListener('click', () => {
-            const url = `${window.location.origin}?title=${encodeURIComponent(title)}`;
-            navigator.clipboard.writeText(url)
-                .then(() => showToast('链接已复制到剪贴板'))
-                .catch(() => showToast('复制失败，请手动复制'));
-        });
-        
-        // 分享到微博
-        newShareWeiboBtn.addEventListener('click', () => {
-            const url = `https://service.weibo.com/share/share.php?url=${encodeURIComponent(window.location.href)}&title=${encodeURIComponent('AI解读热搜：' + title)}`;
-            window.open(url, '_blank');
-        });
-        
-        // 分享到微信（显示二维码）
-        newShareWechatBtn.addEventListener('click', () => {
-            showQRCode(window.location.href);
-        });
-    }
-    
-    // 显示提示消息
-    function showToast(message) {
-        const toast = document.createElement('div');
-        toast.className = 'toast';
-        toast.textContent = message;
-        document.body.appendChild(toast);
-        
-        setTimeout(() => {
-            toast.classList.add('show');
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => toast.remove(), 300);
-            }, 2000);
-        }, 10);
-    }
-    
-    // 添加二维码显示功能
-    function showQRCode(url) {
-        // 创建遮罩层
-        const overlay = document.createElement('div');
-        overlay.className = 'qrcode-overlay';
-        
-        // 创建二维码容器
-        const container = document.createElement('div');
-        container.className = 'qrcode-container';
-        
-        // 添加标题
-        const title = document.createElement('h3');
-        title.textContent = '微信扫码分享';
-        container.appendChild(title);
-        
-        // 添加二维码图片（使用外部服务生成）
-        const qrImage = document.createElement('img');
-        qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`;
-        qrImage.alt = '分享二维码';
-        container.appendChild(qrImage);
-        
-        // 添加提示文字
-        const hint = document.createElement('p');
-        hint.textContent = '打开微信扫一扫，扫描上方二维码即可分享';
-        container.appendChild(hint);
-        
-        // 添加关闭按钮
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'qrcode-close';
-        closeBtn.innerHTML = '&times;';
-        closeBtn.addEventListener('click', () => {
-            document.body.removeChild(overlay);
-        });
-        container.appendChild(closeBtn);
-        
-        // 将容器添加到遮罩层
-        overlay.appendChild(container);
-        
-        // 点击遮罩层关闭
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) {
-                document.body.removeChild(overlay);
-            }
-        });
-        
-        // 添加到页面
-        document.body.appendChild(overlay);
-    }
-    
-    // 添加二维码样式
-    const qrcodeStyle = document.createElement('style');
-    qrcodeStyle.textContent = `
-        .qrcode-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: rgba(0, 0, 0, 0.7);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-        
-        .qrcode-container {
-            background-color: white;
-            padding: 30px;
-            border-radius: 10px;
-            text-align: center;
-            position: relative;
-            max-width: 90%;
-        }
-        
-        .qrcode-container h3 {
-            margin-bottom: 20px;
-            color: #333;
-        }
-        
-        .qrcode-container img {
-            max-width: 200px;
-            height: auto;
-            margin-bottom: 20px;
-        }
-        
-        .qrcode-container p {
-            color: #666;
-            font-size: 0.9rem;
-        }
-        
-        .qrcode-close {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: #999;
-        }
-        
-        .qrcode-close:hover {
-            color: #333;
-        }
-        
-        @media (prefers-color-scheme: dark) {
-            .qrcode-container {
-                background-color: #2a2a2a;
-            }
-            
-            .qrcode-container h3 {
-                color: #e0e0e0;
-            }
-            
-            .qrcode-container p {
-                color: #aaa;
-            }
-            
-            .qrcode-close:hover {
-                color: #e0e0e0;
-            }
-        }
-    `;
-    document.head.appendChild(qrcodeStyle);
     
     // 移除多余的调试元素
     const debugElements = document.querySelectorAll('[style*="border: 1px solid red"], [style*="border:1px solid red"]');

@@ -206,42 +206,50 @@ main {
 }
 
 .content-area {
-    background-color: #fff;
-    border-radius: 12px;
-    box-shadow: 0 2px 15px rgba(0, 0, 0, 0.05);
+    position: relative;
     overflow: hidden;
-    margin: 10px 0;
-    max-width: 800px;
-    margin-left: auto;
-    margin-right: auto;
 }
 
 .news-content {
-    padding: 30px 35px 30px;
+    position: relative;
+    padding: 20px;
+    height: 100%;
+    overflow-y: auto;
 }
 
+/* 确保所有内容区域初始隐藏 */
+.news-content {
+    display: none;
+}
+
+/* 占位符样式 */
 .placeholder {
     display: flex;
-    flex-direction: column;
+    height: 100%;
     align-items: center;
     justify-content: center;
-    height: 350px;
     color: #999;
-    font-size: 1.1rem;
-    background-color: #f9f9f9;
-    border-radius: 12px;
-    margin: 15px;
+    font-size: 1.2rem;
 }
 
-.placeholder p {
+/* 加载状态样式 */
+.loading {
     display: flex;
     align-items: center;
-    gap: 10px;
+    justify-content: center;
+    padding: 20px;
+    color: #666;
+    font-size: 1rem;
 }
 
-.placeholder p::before {
-    content: "👈";
-    font-size: 1.5rem;
+/* 错误容器样式 */
+.error-container {
+    text-align: center;
+    padding: 30px;
+    background-color: #fff5f5;
+    border: 1px solid #ffebeb;
+    border-radius: 10px;
+    margin: 20px 0;
 }
 
 .author-info {
@@ -287,17 +295,6 @@ main {
     font-weight: bold;
     color: #222;
     letter-spacing: -0.01em;
-}
-
-.loading {
-    text-align: center;
-    padding: 50px 0;
-    color: #666;
-    font-size: 1.05rem;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 15px;
 }
 
 .loading::after {

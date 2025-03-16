@@ -48,37 +48,7 @@
                     <div class="placeholder">
                         <p>👈 请从左侧选择一条热搜</p>
                     </div>
-                    <div class="news-content" id="news-content" style="display: none;">
-                        <div class="author-info">
-                            <div class="avatar">
-                                <span>AI</span>
-                            </div>
-                            <div class="author-meta">
-                                <h3>作者</h3>
-                                <p>刚刚发布·</p>
-                            </div>
-                        </div>
-                        
-                        <h2 id="news-title" class="content-title"></h2>
-                        
-                        <div class="loading" id="loading">生成中...</div>
-                        
-                        <div class="ai-content" id="ai-content">
-                            <div class="text-content" id="text-content"></div>
-                            <div class="image-container" id="image-container"></div>
-                        </div>
-                    </div>
-                    <div class="share-buttons">
-                        <button class="share-btn" id="copy-link">
-                            <i class="fas fa-link"></i> 复制链接
-                        </button>
-                        <button class="share-btn" id="share-weibo">
-                            <i class="fab fa-weibo"></i> 分享到微博
-                        </button>
-                        <button class="share-btn" id="share-wechat">
-                            <i class="fab fa-weixin"></i> 分享到微信
-                        </button>
-                    </div>
+                    <!-- 内容区域将动态生成 -->
                 </div>
             </div>
         </main>
@@ -87,6 +57,42 @@
             <p>© 2025 今日热搜榜 - AI智能图文生成</p>
         </footer>
     </div>
+    
+    <!-- 内容模板 -->
+    <template id="news-content-template">
+        <div class="news-content" style="display: none;">
+            <div class="author-info">
+                <div class="avatar">
+                    <span>AI</span>
+                </div>
+                <div class="author-meta">
+                    <h3>作者</h3>
+                    <p>刚刚发布·</p>
+                </div>
+            </div>
+            
+            <h2 class="content-title"></h2>
+            
+            <div class="loading">生成中...</div>
+            
+            <div class="ai-content" style="display: none;">
+                <div class="text-content"></div>
+                <div class="image-container"></div>
+            </div>
+            
+            <div class="share-buttons">
+                <button class="share-btn copy-link">
+                    <i class="fas fa-link"></i> 复制链接
+                </button>
+                <button class="share-btn share-weibo">
+                    <i class="fab fa-weibo"></i> 分享到微博
+                </button>
+                <button class="share-btn share-wechat">
+                    <i class="fab fa-weixin"></i> 分享到微信
+                </button>
+            </div>
+        </div>
+    </template>
     
     <script src="script.js"></script>
 </body>
