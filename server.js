@@ -109,7 +109,7 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
 });
 
 // 流式生成AI内容的接口 - 使用SSE (Server-Sent Events)
-app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
+app.get(`/api/generate`, async (req, res) => {
     const title = req.query.title;
     
     if (!title) {
