@@ -158,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         try {
             // 方法1: 使用EventSource (SSE)
-            const eventSource = new EventSource(`/api/generate?title=${encodeURIComponent(title)}`);
+            const eventSource = new EventSource(`${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`);
             
             let fullContent = '';
             aiContent.style.display = 'none';
