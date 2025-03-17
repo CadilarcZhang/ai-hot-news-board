@@ -9,17 +9,14 @@ document.addEventListener('DOMContentLoaded', function() {
         el.textContent = `刚刚发布 · ${dateStr}`;
     });
     
-    // 获取基础路径
+    // 获取基础路径和当前设备类型
     const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
-    
-    // Node.js服务器地址
-    const SERVER_URL = BASE_PATH; // 使用相对路径，包含基础路径
-    
-    // 当前选中的平台
+    const SERVER_URL = BASE_PATH;
     let currentPlatform = 'weibo';
-    
-    // 存储所有EventSource实例的映射
     const eventSources = {};
+    
+    // 检测是否为移动设备
+    const isMobile = window.innerWidth <= 768;
     
     // 获取热搜数据
     function fetchHotNews(platform = 'weibo') {
@@ -54,10 +51,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // 清空热搜列表
         hotNewsList.innerHTML = '';
         
-        // 清空内容区域，只保留占位符
-        const placeholder = contentArea.querySelector('.placeholder');
-        contentArea.innerHTML = '';
-        contentArea.appendChild(placeholder);
+        // 清空PC端内容区域
+        if (contentArea) {
+            const placeholder = contentArea.querySelector('.placeholder');
+            contentArea.innerHTML = '';
+            contentArea.appendChild(placeholder);
+        }
         
         // 清除所有EventSource连接
         Object.keys(eventSources).forEach(key => {
@@ -67,37 +66,51 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
+        // 移除所有移动端内容
+        document.querySelectorAll('.mobile-content').forEach(el => el.remove());
+        
         hotNews.forEach((news, index) => {
             if (index >= 15) return; // 只显示前15条
             
+            const title = news.word || news.title || news.hotword || news.name;
+            const heat = news.hotindex || news.hotValue || news.score || (Math.floor(Math.random() * 3000) + 1000) + '万';
+            
+            // 创建列表项
             const li = document.createElement('li');
             li.className = 'hot-item';
             li.dataset.id = index + 1;
             
             const rankClass = index < 3 ? ` top${index+1}` : '';
             
-            // 根据不同平台，热搜数据结构可能不同
-            const title = news.word || news.title || news.hotword || news.name;
-            const heat = news.hotindex || news.hotValue || news.score || (Math.floor(Math.random() * 3000) + 1000) + '万';
+            // 为移动端添加展开/收起按钮
+            const toggleBtn = isMobile ? '<button class="toggle-btn" aria-label="展开/收起"></button>' : '';
             
             li.innerHTML = `
                 <span class="hot-rank${rankClass}">${index + 1}</span>
                 <span class="hot-title">${title}</span>
                 <span class="hot-heat">${heat}</span>
+                ${toggleBtn}
             `;
             
-            // 为每个热搜项创建一个内容区域
-            const newsId = `news-${index + 1}`;
-            const template = document.getElementById('news-content-template');
-            const newsContent = template.content.cloneNode(true).querySelector('.news-content');
+            // PC端内容区域处理
+            if (!isMobile && contentArea) {
+                const newsId = `news-${index + 1}`;
+                const template = document.getElementById('news-content-template');
+                const newsContent = template.content.cloneNode(true).querySelector('.news-content');
+                
+                newsContent.id = newsId;
+                newsContent.querySelector('.content-title').textContent = `${index + 1}. ${title}`;
+                
+                contentArea.appendChild(newsContent);
+            }
             
-            newsContent.id = newsId;
-            newsContent.querySelector('.content-title').textContent = `${index + 1}. ${title}`;
-            
-            // 添加到内容区域
-            contentArea.appendChild(newsContent);
-            
-            li.addEventListener('click', function() {
+            // 添加点击事件
+            li.addEventListener('click', function(e) {
+                // 如果点击的是切换按钮，不执行其他操作
+                if (isMobile && e.target.closest('.toggle-btn')) {
+                    return;
+                }
+                
                 // 移除其他项目的active类
                 document.querySelectorAll('.hot-item').forEach(item => {
                     item.classList.remove('active');
@@ -114,6 +127,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
             
+            // 为移动端添加展开/收起按钮点击事件
+            if (isMobile) {
+                const toggleButton = li.querySelector('.toggle-btn');
+                toggleButton.addEventListener('click', function(e) {
+                    e.stopPropagation(); // 阻止事件冒泡
+                    
+                    // 切换当前项的展开状态
+                    li.classList.toggle('expanded');
+                    
+                    // 如果展开了，确保内容已生成
+                    if (li.classList.contains('expanded')) {
+                        // 检查是否已有对应的移动端内容
+                        const existingContent = li.nextElementSibling;
+                        if (!existingContent || !existingContent.classList.contains('mobile-content')) {
+                            // 创建移动端内容
+                            createMobileContent(index + 1, title, heat, li);
+                        }
+                    }
+                });
+            }
+            
             hotNewsList.appendChild(li);
         });
         
@@ -123,6 +157,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (firstItem) {
                 firstItem.classList.add('active');
                 const firstNews = hotNews[0];
+                
                 showNewsContent({
                     id: 1,
                     title: firstNews.word || firstNews.title || firstNews.hotword || firstNews.name,
@@ -440,61 +475,113 @@ document.addEventListener('DOMContentLoaded', function() {
         imageContainer.classList.add('loaded');
     }
     
-    // 全局重试函数
+    // 全局重试函数 - 移动端
+    window.retryMobileGeneration = function(newsId, title, heat) {
+        const mobileContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
+        if (mobileContent) {
+            generateMobileContent(newsId, title, heat, mobileContent);
+        } else {
+            console.error(`找不到移动端内容容器: mobile-news-${newsId}`);
+            // 尝试重新创建
+            const listItem = document.querySelector(`.hot-item[data-id="${newsId}"]`);
+            if (listItem) {
+                createMobileContent(newsId, title, heat, listItem);
+            }
+        }
+    };
+    
+    // 全局重试函数 - PC端
     window.retryGeneration = function(newsId, title) {
         generateAIContent(newsId, title);
     };
     
-    // 格式化内容为HTML
-    function formatContent(text) {
-        if (!text || !text.trim()) {
-            return '<p>正在生成内容...</p>';
+    // 格式化内容，添加样式
+    function formatContent(content) {
+        if (!content) return '';
+        
+        // 分段落处理
+        const paragraphs = content.split('\n\n').filter(p => p.trim());
+        
+        if (paragraphs.length === 0) return content;
+        
+        // 为第一段添加特殊样式
+        let formattedContent = `<p class="first-paragraph">${paragraphs[0]}</p>`;
+        
+        // 处理其余段落
+        for (let i = 1; i < paragraphs.length; i++) {
+            formattedContent += `<p>${paragraphs[i]}</p>`;
         }
         
-        // 使用更高效的方式分割段落
-        const paragraphs = text.split('\n\n').length > 1 
-            ? text.split('\n\n') 
-            : text.split('\n');
-        
-        // 过滤空段落并格式化
-        return paragraphs
-            .filter(p => p.trim())
-            .map((p, i) => {
-                // 为第一段添加特殊样式
-                if (i === 0) {
-                    return `<p class="first-paragraph">${p}</p>`;
-                }
-                return `<p>${p}</p>`;
-            })
-            .join('');
+        return formattedContent;
     }
     
-    // 显示新闻内容
+    // 显示新闻内容 - 同时处理PC和移动端
     function showNewsContent(news) {
-        const contentArea = document.getElementById('content-area');
-        const placeholder = contentArea.querySelector('.placeholder');
-        const newsId = `news-${news.id}`;
-        const newsContent = document.getElementById(newsId);
+        if (!news || !news.id || !news.title) {
+            console.error('无效的新闻数据:', news);
+            return;
+        }
         
-        // 隐藏所有内容区域
-        document.querySelectorAll('.news-content').forEach(content => {
-            content.style.display = 'none';
-        });
-        
-        // 隐藏占位符
-        placeholder.style.display = 'none';
-        
-        // 显示当前内容区域
-        newsContent.style.display = 'block';
-        
-        // 检查是否已经生成过内容
-        const textContent = newsContent.querySelector('.text-content');
-        if (!textContent.innerHTML.trim()) {
-            // 如果没有内容，则生成
-            generateAIContent(news.id, news.title);
-        } else if (!newsContent.querySelector('.image-container').innerHTML.trim()) {
-            // 如果有内容但没有图片，生成图片
-            createSVGImage(news.id, news.title, news.heat);
+        if (isMobile) {
+            // 移动端逻辑
+            const listItem = document.querySelector(`.hot-item[data-id="${news.id}"]`);
+            if (listItem) {
+                // 展开当前项
+                listItem.classList.add('expanded');
+                
+                // 检查是否已有对应的移动端内容
+                const existingContent = listItem.nextElementSibling;
+                if (!existingContent || !existingContent.classList.contains('mobile-content')) {
+                    // 创建移动端内容
+                    createMobileContent(news.id, news.title, news.heat, listItem);
+                }
+            }
+            document.querySelector('.right-panel').style.display = 'none';
+        } else {
+            // PC端逻辑 - 保持原有逻辑
+            const contentArea = document.getElementById('content-area');
+            if (!contentArea) {
+                console.error('找不到内容区域元素');
+                return;
+            }
+            
+            const placeholder = contentArea.querySelector('.placeholder');
+            if (!placeholder) {
+                console.error('找不到占位符元素');
+                return;
+            }
+            
+            const newsId = `news-${news.id}`;
+            const newsContent = document.getElementById(newsId);
+            
+            if (!newsContent) {
+                console.error(`找不到新闻内容元素: ${newsId}`);
+                return;
+            }
+            
+            // 隐藏所有内容区域
+            document.querySelectorAll('.news-content').forEach(content => {
+                content.style.display = 'none';
+            });
+            
+            // 隐藏占位符
+            placeholder.style.display = 'none';
+            
+            // 显示当前内容区域
+            newsContent.style.display = 'block';
+            
+            // 检查是否已经生成过内容
+            const textContent = newsContent.querySelector('.text-content');
+            if (textContent && !textContent.innerHTML.trim()) {
+                // 如果没有内容，则生成
+                generateAIContent(news.id, news.title);
+            } else {
+                const imageContainer = newsContent.querySelector('.image-container');
+                if (imageContainer && !imageContainer.innerHTML.trim()) {
+                    // 如果有内容但没有图片，生成图片
+                    createSVGImage(news.id, news.title, news.heat);
+                }
+            }
         }
     }
     
@@ -607,4 +694,298 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
+    
+    // 创建移动端内容区域
+    function createMobileContent(newsId, title, heat, listItem) {
+        console.log('创建移动端内容:', newsId, title);
+        
+        // 移除可能已存在的内容
+        const existingContent = listItem.nextElementSibling;
+        if (existingContent && existingContent.classList.contains('mobile-content')) {
+            existingContent.remove();
+        }
+        
+        // 直接创建移动端内容元素，不依赖模板
+        const mobileContent = document.createElement('div');
+        mobileContent.className = 'mobile-content';
+        mobileContent.dataset.id = `mobile-news-${newsId}`;
+        
+        mobileContent.innerHTML = `
+            <div class="mobile-content-inner">
+                <div class="mobile-header">
+                    <h3 class="mobile-title">${title}</h3>
+                    <span class="mobile-heat">${heat}</span>
+                </div>
+                <div class="mobile-body">
+                    <div class="mobile-loading">
+                        <div class="loading-spinner"></div>
+                        <p>AI正在生成解读...</p>
+                    </div>
+                    <div class="mobile-text-content"></div>
+                    <div class="mobile-image-container"></div>
+                </div>
+            </div>
+        `;
+        
+        // 插入到列表项后面
+        listItem.parentNode.insertBefore(mobileContent, listItem.nextSibling);
+        
+        // 生成内容
+        generateMobileContent(newsId, title, heat, mobileContent);
+    }
+    
+    // 为移动端生成AI内容
+    function generateMobileContent(newsId, title, heat, mobileContent) {
+        // 确保mobileContent存在
+        if (!mobileContent) {
+            console.error('移动端内容容器不存在');
+            return;
+        }
+        
+        // 获取内容元素
+        const textContent = mobileContent.querySelector('.mobile-text-content');
+        const imageContainer = mobileContent.querySelector('.mobile-image-container');
+        const loading = mobileContent.querySelector('.mobile-loading');
+        
+        // 确保所有元素存在
+        if (!textContent || !imageContainer || !loading) {
+            console.error('移动端内容元素不完整');
+            return;
+        }
+        
+        // 显示加载状态
+        loading.style.display = 'flex';
+        textContent.innerHTML = '';
+        
+        // 检查本地存储中是否有缓存
+        const localCacheKey = `content-${title}`;
+        const localCache = localStorage.getItem(localCacheKey);
+        
+        if (localCache) {
+            try {
+                const cachedData = JSON.parse(localCache);
+                const now = Date.now();
+                
+                // 检查缓存是否过期
+                if (cachedData.expiry > now) {
+                    console.log(`从本地缓存获取内容: ${title}`);
+                    
+                    // 显示缓存的内容
+                    loading.style.display = 'none';
+                    textContent.innerHTML = formatContent(cachedData.content);
+                    
+                    // 生成图片
+                    generateMobileImage(newsId, title, cachedData.content, heat, imageContainer);
+                    
+                    return;
+                } else {
+                    // 缓存已过期，删除
+                    localStorage.removeItem(localCacheKey);
+                }
+            } catch (e) {
+                console.error('解析本地缓存出错:', e);
+                localStorage.removeItem(localCacheKey);
+            }
+        }
+
+        let fullContent = '';
+
+        // 生成图片
+        generateMobileImage(newsId, title, fullContent, heat, imageContainer);
+        
+        
+        // 关闭之前的EventSource连接（如果存在）
+        if (eventSources[`mobile-${newsId}`]) {
+            eventSources[`mobile-${newsId}`].close();
+            delete eventSources[`mobile-${newsId}`];
+        }
+        
+        try {
+            // 使用EventSource (SSE)
+            const eventSource = new EventSource(`${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`);
+            eventSources[`mobile-${newsId}`] = eventSource;
+            
+            eventSource.onopen = (evt) => {
+                console.log(`移动端SSE成功建立连接 (${newsId})`, evt);
+            };
+            
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    loading.style.display = 'none';
+                    
+                    if (data.content) {
+                        fullContent += data.content;
+                        textContent.innerHTML = formatContent(fullContent);
+                    }
+                    
+                    if (data.done) {
+                        // 保存到本地缓存
+                        if (fullContent.trim().length > 0) {
+                            try {
+                                const cacheData = {
+                                    content: fullContent,
+                                    expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
+                                };
+                                localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
+                                console.log(`内容已保存到本地缓存: ${title}`);
+                            } catch (e) {
+                                console.error('保存到本地缓存失败:', e);
+                            }
+                        }
+                        
+                        // 生成图片
+                        // generateMobileImage(newsId, title, fullContent, heat, imageContainer);
+                        
+                        if (eventSources[`mobile-${newsId}`]) {
+                            eventSources[`mobile-${newsId}`].close();
+                            delete eventSources[`mobile-${newsId}`];
+                        }
+                    }
+                } catch (e) {
+                    console.error('解析事件数据出错:', e);
+                }
+            };
+            
+            eventSource.onerror = function(error) {
+                console.error(`移动端EventSource错误 (${newsId}):`, error);
+                
+                if (eventSources[`mobile-${newsId}`]) {
+                    eventSources[`mobile-${newsId}`].close();
+                    delete eventSources[`mobile-${newsId}`];
+                }
+                
+                // 显示错误信息
+                loading.style.display = 'none';
+                textContent.innerHTML = `
+                    <div class="error-container">
+                        <div class="error-icon">⚠️</div>
+                        <p class="error-message">生成内容时出错</p>
+                        <p class="error-action">请稍后再试或选择其他热搜话题</p>
+                        <button class="retry-button" onclick="window.retryMobileGeneration('${newsId}', '${title}', '${heat}')">重试</button>
+                    </div>
+                `;
+            };
+        } catch (error) {
+            console.error(`移动端生成内容时出错 (${newsId}):`, error);
+            loading.style.display = 'none';
+            
+            // 显示错误信息
+            textContent.innerHTML = `
+                <div class="error-container">
+                    <div class="error-icon">⚠️</div>
+                    <p class="error-message">生成内容时出错</p>
+                    <p class="error-action">请稍后再试或选择其他热搜话题</p>
+                    <button class="retry-button" onclick="window.retryMobileGeneration('${newsId}', '${title}', '${heat}')">重试</button>
+                </div>
+            `;
+        }
+    }
+    
+    // 为移动端生成图片
+    function generateMobileImage(newsId, title, content, heat, imageContainer) {
+        // 检查本地存储中是否有图片缓存
+        const localCacheKey = `image-${title}`;
+        const localCache = localStorage.getItem(localCacheKey);
+        
+        if (localCache) {
+            try {
+                const cachedData = JSON.parse(localCache);
+                const now = Date.now();
+                
+                // 检查缓存是否过期
+                if (cachedData.expiry > now) {
+                    console.log(`从本地缓存获取图片: ${title}`);
+                    
+                    // 显示缓存的图片
+                    imageContainer.innerHTML = `<img src="${cachedData.url}" alt="${title}" class="generated-image">`;
+                    return;
+                } else {
+                    // 缓存已过期，删除
+                    localStorage.removeItem(localCacheKey);
+                }
+            } catch (e) {
+                console.error('解析本地图片缓存出错:', e);
+                localStorage.removeItem(localCacheKey);
+            }
+        }
+        
+        // 创建SVG占位图
+        createMobileSVGImage(newsId, title, heat, imageContainer);
+        
+        // 构建提示词
+        const prompt = `新闻图片，主题：${title}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
+        
+        // 调用图片生成API
+        fetch(`${SERVER_URL}/api/generate-image`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                prompt: prompt,
+                title: title
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.image) {
+                // 显示生成的图片
+                imageContainer.innerHTML = `<img src="${data.image}" alt="${title}" class="generated-image">`;
+                
+                // 保存到本地缓存
+                try {
+                    const cacheData = {
+                        url: data.image,
+                        expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
+                    };
+                    localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
+                    console.log(`图片已保存到本地缓存: ${title}`);
+                } catch (e) {
+                    console.error('保存图片到本地缓存失败:', e);
+                }
+            }
+        })
+        .catch(error => {
+            console.error('移动端图片生成出错:', error);
+            // SVG图片已作为占位符显示
+        });
+    }
+    
+    // 创建移动端SVG图片
+    function createMobileSVGImage(newsId, title, heat, imageContainer) {
+        // 使用SVG图片，不依赖外部资源
+        const colors = {
+            1: "#ff3852", // 红色
+            2: "#ff9500", // 橙色
+            3: "#ffcc00", // 黄色
+            4: "#4cd964", // 绿色
+            5: "#5ac8fa", // 蓝色
+            6: "#007aff", // 深蓝色
+            7: "#5856d6", // 紫色
+            8: "#ff2d55", // 粉色
+            9: "#8e8e93", // 灰色
+            10: "#ff3b30" // 红色
+        };
+        
+        // 创建SVG图片
+        imageContainer.innerHTML = `
+            <svg width="100%" height="150" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100%" height="100%" fill="#f5f5f5"/>
+                <rect width="100%" height="100%" fill="${colors[newsId % 10 + 1] || '#ff3852'}" opacity="0.1"/>
+                <text x="50%" y="45%" font-family="Arial" font-size="16" fill="${colors[newsId % 10 + 1] || '#ff3852'}" text-anchor="middle" font-weight="bold">${title}</text>
+                <text x="50%" y="65%" font-family="Arial" font-size="14" fill="#666" text-anchor="middle">热度: ${heat}</text>
+            </svg>
+        `;
+    }
+    
+    // 监听窗口大小变化，动态调整布局
+    window.addEventListener('resize', function() {
+        const newIsMobile = window.innerWidth <= 768;
+        
+        // 如果设备类型发生变化，重新加载页面
+        if (newIsMobile !== isMobile) {
+            location.reload();
+        }
+    });
 }); 

@@ -353,7 +353,7 @@ main {
     overflow: hidden;
     margin-top: 20px;
     margin-bottom: 30px;
-    min-height: 450px;
+    min-height: 200px;
     display: block;
 }
 
@@ -1010,4 +1010,162 @@ body:not(.dark-mode) .image-loading::after {
 .generated-image:hover {
     transform: scale(1.01);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* 移动端适配样式 */
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column;
+        padding: 0;
+    }
+    
+    .left-panel {
+        width: 100%;
+        margin-right: 0;
+        border-radius: 0;
+    }
+    
+    .desktop-only {
+        display: none !important;
+    }
+    
+    .hot-item {
+        position: relative;
+        padding-right: 40px;
+    }
+    
+    .toggle-btn {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 24px;
+        height: 24px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.3s ease;
+    }
+    
+    .toggle-btn:before {
+        content: "";
+        display: block;
+        width: 10px;
+        height: 10px;
+        border-right: 2px solid #666;
+        border-bottom: 2px solid #666;
+        transform: rotate(45deg);
+    }
+    
+    .hot-item.expanded .toggle-btn:before {
+        transform: rotate(-135deg);
+    }
+    
+    .mobile-content {
+        display: none;
+        background: #fff;
+        border-top: 1px solid #eee;
+        overflow: hidden;
+        max-height: 0;
+        transition: max-height 0.3s ease-out;
+    }
+    
+    .hot-item.expanded + .mobile-content {
+        display: block;
+        max-height: 2000px;
+        transition: max-height 0.5s ease-in;
+    }
+    
+    .mobile-content-inner {
+        padding: 15px;
+    }
+    
+    .mobile-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    
+    .mobile-title {
+        font-size: 16px;
+        font-weight: bold;
+        margin: 0;
+        color: #333;
+    }
+    
+    .mobile-heat {
+        font-size: 14px;
+        color: #ff3852;
+    }
+    
+    .mobile-loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 20px 0;
+    }
+    
+    .loading-spinner {
+        width: 30px;
+        height: 30px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #ff3852;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-bottom: 10px;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    .mobile-text-content {
+        font-size: 15px;
+        line-height: 1.6;
+        color: #333;
+    }
+    
+    .mobile-text-content .first-paragraph {
+        font-weight: bold;
+        font-size: 16px;
+    }
+    
+    .mobile-image-container {
+        margin-top: 15px;
+        width: 100%;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    
+    .mobile-image-container img,
+    .mobile-image-container svg {
+        width: 100%;
+        height: auto;
+        max-height: 200px;
+        object-fit: cover;
+    }
+    
+    /* 暗黑模式适配 */
+    body.dark-mode .mobile-content {
+        background: #222;
+        border-top: 1px solid #333;
+    }
+    
+    body.dark-mode .mobile-title {
+        color: #eee;
+    }
+    
+    body.dark-mode .mobile-text-content {
+        color: #ddd;
+    }
+    
+    body.dark-mode .toggle-btn:before {
+        border-color: #999;
+    }
 }

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <!-- 基本 favicon -->
     <link rel="icon" href="favicon.ico" type="image/x-icon">
     <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
@@ -15,7 +15,70 @@
     
     <!-- 针对 Android 设备的图标 -->
     <link rel="manifest" href="site.webmanifest">
-    <!-- ... 现有代码 ... -->
+    
+    <!-- 添加样式表 -->
+    <link rel="stylesheet" href="styles.css">
+    <title>热搜解读</title>
 </head>
-<!-- ... 现有代码 ... -->
+<body>
+<header>
+    <div class="logo">
+        <i class="icon">🔥</i>
+        <h1>热搜解读</h1>
+    </div>
+    <p class="subtitle">AI实时解读热搜话题</p>
+    <div class="actions">
+        <button id="theme-toggle">切换主题</button>
+    </div>
+</header>
+<main>
+    <div class="container">
+        <div class="left-panel">
+            <div class="platform-tabs">
+                <button class="platform-tab active" data-platform="weibo">微博</button>
+                <button class="platform-tab" data-platform="toutiao">头条</button>
+                <button class="platform-tab" data-platform="douyin">抖音</button>
+            </div>
+            <ul id="hot-news-list" class="hot-news-list">
+                <!-- 热搜列表项将在这里生成 -->
+            </ul>
+        </div>
+        
+        <!-- PC端内容区域 -->
+        <div id="content-area" class="content-area desktop-only">
+            <div class="placeholder">
+                <h2>选择一个热搜话题，查看AI解读</h2>
+                <p>点击左侧列表中的热搜话题，AI将为您生成解读内容</p>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- 确保PC端模板存在 -->
+<template id="news-content-template">
+    <div class="news-content">
+        <h2 class="content-title"></h2>
+        <div class="content-body">
+            <div class="text-content"></div>
+            <div class="image-container"></div>
+            <div class="loading">
+                <div class="loading-spinner"></div>
+                <p>AI正在生成解读...</p>
+            </div>
+            <div class="ai-content">
+                <div class="author-info">
+                    <div class="author-avatar">AI</div>
+                    <div class="author-meta">
+                        <h3>AI热搜解读</h3>
+                        <p>刚刚发布</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</template>
+
+<!-- 添加脚本 -->
+<script src="script.js"></script>
+</body>
 </html> 
