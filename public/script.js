@@ -186,9 +186,45 @@ document.addEventListener('DOMContentLoaded', function() {
         const hotItem = document.querySelector(`.hot-item[data-id="${newsId}"]`);
         const heat = hotItem ? hotItem.querySelector('.hot-heat').textContent : '热度未知';
         
+        // 检查本地存储中是否有缓存
+        const localCacheKey = `content-${title}`;
+        const localCache = localStorage.getItem(localCacheKey);
+        
+        if (localCache) {
+            try {
+                const cachedData = JSON.parse(localCache);
+                const now = Date.now();
+                
+                // 检查缓存是否过期（24小时）
+                if (cachedData.expiry > now) {
+                    console.log(`从本地缓存获取内容: ${title}`);
+                    
+                    // 显示缓存的内容
+                    loadingElement.style.display = 'none';
+                    aiContent.style.display = 'block';
+                    contentContainer.innerHTML = formatContent(cachedData.content);
+                    
+                    // 生成图片
+                    if (!imageContainer.innerHTML.trim()) {
+                        createSVGImage(newsId, title, heat);
+                        setTimeout(() => {
+                            generateImageForContent(newsId, title, cachedData.content, heat);
+                        }, 500);
+                    }
+                    
+                    return;
+                } else {
+                    // 缓存已过期，删除
+                    localStorage.removeItem(localCacheKey);
+                }
+            } catch (e) {
+                console.error('解析本地缓存出错:', e);
+                localStorage.removeItem(localCacheKey);
+            }
+        }
+        
         // 显示加载状态
         loadingElement.style.display = 'flex';
-        // imageContainer.style.display = 'none';
         contentContainer.innerHTML = '';
         
         // 清空图片容器
@@ -227,15 +263,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     if (data.done) {
-                        // 先显示SVG图片作为占位符
-                        // 获取热度信息，从列表项中获取
-                        // const hotItem = document.querySelector(`.hot-item[data-id="${newsId}"]`);
-                        // const heat = hotItem ? hotItem.querySelector('.hot-heat').textContent : '热度未知';
-                        
-                        // createSVGImage(newsId, title, heat);
-
-                        // 然后尝试生成真实图片
-                        // generateImageForContent(newsId, title, fullContent, heat);
+                        // 保存到本地缓存
+                        if (fullContent.trim().length > 0) {
+                            try {
+                                const cacheData = {
+                                    content: fullContent,
+                                    expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
+                                };
+                                localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
+                                console.log(`内容已保存到本地缓存: ${title}`);
+                            } catch (e) {
+                                console.error('保存到本地缓存失败:', e);
+                            }
+                        }
                         
                         if (eventSources[newsId]) {
                             eventSources[newsId].close();
@@ -287,8 +327,34 @@ document.addEventListener('DOMContentLoaded', function() {
         const newsContent = document.getElementById(`news-${newsId}`);
         const imageContainer = newsContent.querySelector('.image-container');
         
-        // 提取内容的前200个字符作为提示词基础
-        // const contentSummary = content.substring(0, 200).replace(/[\n\r]/g, ' ');
+        // 检查本地存储中是否有图片缓存
+        const localCacheKey = `image-${title}`;
+        const localCache = localStorage.getItem(localCacheKey);
+        
+        if (localCache) {
+            try {
+                const cachedData = JSON.parse(localCache);
+                const now = Date.now();
+                
+                // 检查缓存是否过期（7天）
+                if (cachedData.expiry > now) {
+                    console.log(`从本地缓存获取图片: ${title}`);
+                    
+                    // 显示缓存的图片
+                    imageContainer.innerHTML = `<img src="${cachedData.url}" alt="${title}" class="generated-image">`;
+                    imageContainer.classList.add('loaded');
+                    imageContainer.style.display = 'block';
+                    
+                    return;
+                } else {
+                    // 缓存已过期，删除
+                    localStorage.removeItem(localCacheKey);
+                }
+            } catch (e) {
+                console.error('解析本地图片缓存出错:', e);
+                localStorage.removeItem(localCacheKey);
+            }
+        }
         
         // 构建提示词，使其更具体和相关
         // const prompt = `新闻图片，主题：${title}，内容：${contentSummary}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
@@ -314,6 +380,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 显示生成的图片
                 imageContainer.innerHTML = `<img src="${data.image}" alt="${title}" class="generated-image">`;
                 imageContainer.classList.add('loaded');
+                
+                // 保存到本地缓存
+                try {
+                    const cacheData = {
+                        url: data.image,
+                        expiry: Date.now() + (24 * 60 * 60 * 1000) // 7天过期
+                    };
+                    localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
+                    console.log(`图片已保存到本地缓存: ${title}`);
+                } catch (e) {
+                    console.error('保存图片到本地缓存失败:', e);
+                }
             } else {
                 // 如果没有成功生成图片，保留SVG图片
                 console.log('图片生成失败，保留SVG图片');
@@ -350,7 +428,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 创建SVG图片
         imageContainer.innerHTML = `
-            <svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
+            <svg width="100%" height="450" xmlns="http://www.w3.org/2000/svg">
                 <rect width="100%" height="100%" fill="#f5f5f5"/>
                 <rect width="100%" height="100%" fill="${colors[newsId % 10 + 1] || '#ff3852'}" opacity="0.1"/>
                 <text x="50%" y="45%" font-family="Arial" font-size="28" fill="${colors[newsId % 10 + 1] || '#ff3852'}" text-anchor="middle" font-weight="bold">${title}</text>
