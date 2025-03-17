@@ -12,14 +12,39 @@ document.addEventListener('DOMContentLoaded', function() {
     // 获取基础路径和当前设备类型
     const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
     const SERVER_URL = BASE_PATH;
-    let currentPlatform = 'weibo';
+    
+    // 从URL路径中提取平台信息
+    let currentPlatform = 'weibo'; // 默认平台
+    const pathParts = window.location.pathname.split('/');
+    if (pathParts.length > 0) {
+        const lastPart = pathParts[pathParts.length - 1];
+        if (['weibo', 'toutiao', 'douyin'].includes(lastPart)) {
+            currentPlatform = lastPart;
+        }
+    }
+    
     const eventSources = {};
     
     // 检测是否为移动设备
     const isMobile = window.innerWidth <= 768;
     
+    // 从URL获取newsId参数
+    const urlParams = new URLSearchParams(window.location.search);
+    const targetNewsId = urlParams.get('newsId');
+    
     // 获取热搜数据
     function fetchHotNews(platform = 'weibo') {
+        // 更新当前平台
+        currentPlatform = platform;
+        
+        // 更新URL中的平台信息
+        updateUrlWithPlatform(platform);
+        
+        // 更新平台标签的激活状态
+        document.querySelectorAll('.platform-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.platform === platform);
+        });
+        
         // 显示加载状态
         const hotNewsList = document.getElementById('hot-news-list');
         hotNewsList.innerHTML = '<div class="loading-list">加载热搜数据中...</div>';
@@ -30,6 +55,13 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(data => {
                 if (data.code === 200) {
                     renderHotNewsList(data.result.list);
+                    
+                    // 如果URL中有newsId参数，自动选中对应的热搜
+                    if (targetNewsId) {
+                        setTimeout(() => {
+                            selectNewsByIndex(parseInt(targetNewsId));
+                        }, 300);
+                    }
                 } else {
                     console.error('获取热搜失败:', data.msg || data.error);
                     // 如果API调用失败，使用备用数据
@@ -41,6 +73,56 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 如果API调用出错，使用备用数据
                 renderHotNewsList(getFallbackData(platform));
             });
+    }
+    
+    // 根据索引选择热搜
+    function selectNewsByIndex(index) {
+        const hotItem = document.querySelector(`.hot-item[data-id="${index}"]`);
+        if (hotItem) {
+            // 模拟点击该热搜项
+            hotItem.click();
+            
+            // 滚动到该热搜项
+            hotItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            console.log(`已自动选中第 ${index} 个热搜`);
+        } else {
+            console.error(`找不到索引为 ${index} 的热搜项`);
+        }
+    }
+    
+    // 更新URL中的平台信息
+    function updateUrlWithPlatform(platform) {
+        if (!platform) return;
+        
+        // 创建新的URL对象
+        const url = new URL(window.location.href);
+        
+        // 构建新的路径
+        let newPath = BASE_PATH;
+        if (platform !== 'weibo') { // 如果不是默认平台，添加到路径
+            newPath = `${BASE_PATH}/${platform}`;
+        }
+        
+        // 设置新的URL路径
+        url.pathname = newPath;
+        
+        // 使用History API更新URL，不刷新页面
+        window.history.replaceState({}, '', url.toString());
+    }
+    
+    // 更新URL中的newsId参数
+    function updateUrlWithNewsId(newsId) {
+        if (!newsId) return;
+        
+        // 创建新的URL对象
+        const url = new URL(window.location.href);
+        
+        // 设置或更新newsId参数
+        url.searchParams.set('newsId', newsId);
+        
+        // 使用History API更新URL，不刷新页面
+        window.history.replaceState({}, '', url.toString());
     }
     
     // 渲染热搜列表
@@ -119,6 +201,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 为当前项目添加active类
                 this.classList.add('active');
                 
+                // 更新URL，但不刷新页面
+                const newsId = this.dataset.id;
+                updateUrlWithNewsId(newsId);
+                
                 // 显示对应的内容区域
                 showNewsContent({
                     id: index + 1,
@@ -151,8 +237,8 @@ document.addEventListener('DOMContentLoaded', function() {
             hotNewsList.appendChild(li);
         });
         
-        // 页面加载时默认选中第一个热搜
-        if (hotNews.length > 0) {
+        // 页面加载时默认选中第一个热搜，除非URL中有指定的newsId
+        if (hotNews.length > 0 && !targetNewsId) {
             const firstItem = document.querySelector('.hot-item');
             if (firstItem) {
                 firstItem.classList.add('active');
@@ -168,48 +254,50 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 备用数据，当API调用失败时使用
-    function getFallbackData(platform = 'weibo') {
-        const data = {
-            'weibo': [
-                { word: "国庆假期旅游总收入超9000亿元", hotindex: "3824.5万" },
-                { word: "苹果发布iOS18新功能", hotindex: "2956.3万" },
-                { word: "中秋节赏月指南", hotindex: "2541.8万" },
-                { word: "专家称每天喝咖啡或降低死亡风险", hotindex: "2103.2万" },
-                { word: "新能源汽车销量创新高", hotindex: "1987.6万" },
-                { word: "大学生就业率持续上升", hotindex: "1756.9万" },
-                { word: "秋季养生小常识", hotindex: "1654.3万" },
-                { word: "新款智能手表功能大揭秘", hotindex: "1532.7万" },
-                { word: "国庆档电影票房突破50亿", hotindex: "1421.5万" },
-                { word: "健康饮食新趋势", hotindex: "1320.8万" }
+    function getFallbackData(platform) {
+        const fallbackData = {
+            weibo: [
+                { word: "热搜榜加载失败，请刷新重试", hotindex: "9999万" },
+                { word: "网络连接问题", hotindex: "8888万" },
+                { word: "请检查您的网络设置", hotindex: "7777万" },
+                { word: "点击刷新按钮重新加载", hotindex: "6666万" },
+                { word: "或者尝试切换其他平台", hotindex: "5555万" }
             ],
-            'toutiao': [
-                { word: "国庆假期全国接待游客超8亿人次", hotindex: "4125.7万" },
-                { word: "多地医院儿科爆满", hotindex: "3876.2万" },
-                { word: "新一轮冷空气将影响北方地区", hotindex: "3654.9万" },
-                { word: "电影《志愿军》票房破20亿", hotindex: "3421.3万" },
-                { word: "多地景区门票降价", hotindex: "3210.5万" },
-                { word: "新能源车企价格战再升级", hotindex: "2987.6万" },
-                { word: "专家建议延长带薪年假", hotindex: "2765.4万" },
-                { word: "全国多地将迎来降雨", hotindex: "2543.8万" },
-                { word: "研究显示睡眠不足影响免疫力", hotindex: "2321.7万" },
-                { word: "多地上调最低工资标准", hotindex: "2109.3万" }
+            toutiao: [
+                { title: "头条热榜加载失败，请刷新重试", hotValue: "9999万" },
+                { title: "网络连接问题", hotValue: "8888万" },
+                { title: "请检查您的网络设置", hotValue: "7777万" },
+                { title: "点击刷新按钮重新加载", hotValue: "6666万" },
+                { title: "或者尝试切换其他平台", hotValue: "5555万" }
             ],
-            'douyin': [
-                { word: "国庆假期消费数据创新高", hotindex: "4532.1万" },
-                { word: "多地医保定点药店可刷医保电子凭证", hotindex: "4321.8万" },
-                { word: "专家称现在非典型肺炎并不可怕", hotindex: "4102.5万" },
-                { word: "北京公积金贷款额度上限提高", hotindex: "3876.3万" },
-                { word: "女子吐槽景区商家2根玉米80元", hotindex: "3654.9万" },
-                { word: "专家建议取消地铁早高峰限流", hotindex: "3421.7万" },
-                { word: "多地景区门票价格下调", hotindex: "3210.5万" },
-                { word: "全国多地将迎来新一轮降雨", hotindex: "2987.6万" },
-                { word: "研究显示每天1杯咖啡可降低死亡风险", hotindex: "2765.4万" },
-                { word: "专家称未来十年房价会稳中有降", hotindex: "2543.8万" }
+            douyin: [
+                { hotword: "抖音热点加载失败，请刷新重试", score: "9999万" },
+                { hotword: "网络连接问题", score: "8888万" },
+                { hotword: "请检查您的网络设置", score: "7777万" },
+                { hotword: "点击刷新按钮重新加载", score: "6666万" },
+                { hotword: "或者尝试切换其他平台", score: "5555万" }
             ]
         };
         
-        return data[platform] || data['weibo'];
+        return fallbackData[platform] || fallbackData.weibo;
     }
+    
+    // 初始化平台标签点击事件
+    function initPlatformTabs() {
+        const platformTabs = document.querySelectorAll('.platform-tab');
+        platformTabs.forEach(tab => {
+            tab.addEventListener('click', function() {
+                const platform = this.dataset.platform;
+                fetchHotNews(platform);
+            });
+        });
+    }
+    
+    // 初始化
+    initPlatformTabs();
+    
+    // 根据URL路径加载对应平台的热搜数据
+    fetchHotNews(currentPlatform);
     
     // 使用流式API生成内容
     function generateAIContent(newsId, title) {
@@ -585,116 +673,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // 平台标签切换
-    const platformTabs = document.querySelectorAll('.platform-tab');
-    platformTabs.forEach(tab => {
-        tab.addEventListener('click', function() {
-            platformTabs.forEach(t => t.classList.remove('active'));
-            this.classList.add('active');
-            
-            // 获取平台类型
-            currentPlatform = this.dataset.platform;
-            
-            // 获取该平台的热搜数据
-            fetchHotNews(currentPlatform);
-        });
-    });
-    
-    // 刷新按钮
-    const refreshBtn = document.querySelector('.refresh-btn');
-    refreshBtn.addEventListener('click', function() {
-        const icon = this.querySelector('i');
-        icon.classList.add('rotating');
-        
-        setTimeout(() => {
-            icon.classList.remove('rotating');
-        }, 1000);
-        
-        fetchHotNews(currentPlatform);
-    });
-    
-    // 初始化：获取微博热搜数据
-    fetchHotNews('weibo');
-    
-    // 添加CSS动画
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes rotating {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-        }
-        .rotating {
-            animation: rotating 1s linear;
-        }
-        .loading-list {
-            text-align: center;
-            padding: 20px;
-            color: #999;
-        }
-    `;
-    document.head.appendChild(style);
-    
-    // 移除多余的调试元素
-    const debugElements = document.querySelectorAll('[style*="border: 1px solid red"], [style*="border:1px solid red"]');
-    debugElements.forEach(el => {
-        el.style.border = 'none';
-        // 如果元素是空的，完全移除它
-        if (!el.innerText.trim() && !el.querySelector('img') && !el.classList.contains('loading')) {
-            el.style.display = 'none';
-        }
-    });
-    
-    // 检查并移除空的内容容器
-    const emptyContainers = document.querySelectorAll('.content-area > div:empty');
-    emptyContainers.forEach(el => {
-        if (!el.classList.contains('loading') && !el.classList.contains('placeholder')) {
-            el.style.display = 'none';
-        }
-    });
-    
-    // 主题切换按钮逻辑
-    const themeToggleBtn = document.getElementById('theme-toggle');
-    
-    // 检查本地存储中的主题设置
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark') {
-        document.body.classList.add('dark-mode');
-        applyDarkMode(true);
-    }
-    
-    // 添加点击事件
-    themeToggleBtn.addEventListener('click', function() {
-        document.body.classList.toggle('dark-mode');
-        
-        // 更新所有需要暗黑模式的元素
-        const isDarkMode = document.body.classList.contains('dark-mode');
-        applyDarkMode(isDarkMode);
-        
-        // 保存主题设置到本地存储
-        localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
-    });
-    
-    // 应用深色模式到所有元素
-    function applyDarkMode(isDarkMode) {
-        const elements = [
-            '.content-area', '.news-content', '.placeholder', 
-            '.image-container', 'header', 'main', '.left-panel', 
-            '.hot-item', '.platform-tab', '.text-content',
-            '.author-info', '.author-meta', '.share-btn',
-            '.loading', '.error-container'
-        ];
-        
-        elements.forEach(selector => {
-            document.querySelectorAll(selector).forEach(el => {
-                if (isDarkMode) {
-                    el.classList.add('dark-mode');
-                } else {
-                    el.classList.remove('dark-mode');
-                }
-            });
-        });
-    }
-    
     // 创建移动端内容区域
     function createMobileContent(newsId, title, heat, listItem) {
         console.log('创建移动端内容:', newsId, title);
@@ -732,6 +710,8 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 生成内容
         generateMobileContent(newsId, title, heat, mobileContent);
+        
+        return mobileContent;
     }
     
     // 为移动端生成AI内容

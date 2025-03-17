@@ -496,8 +496,9 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
     }
 });
 
-// 确保SPA路由处理正确
-app.get(`${BASE_PATH}/*`, (req, res) => {
+// 添加对平台路径的支持
+app.get(`${BASE_PATH}/:platform?`, (req, res) => {
+    // 发送index.html文件
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
