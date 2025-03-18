@@ -1,6 +1,6 @@
 {
-  "name": "热搜解读",
-  "short_name": "热搜",
+  "name": "今日热搜榜",
+  "short_name": "热搜榜",
   "icons": [
     {
       "src": "/android-chrome-192x192.png",

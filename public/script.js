@@ -1053,4 +1053,19 @@ document.addEventListener('DOMContentLoaded', function() {
             location.reload();
         }
     });
+
+    // 更新网站标题
+    document.title = "今日热搜榜";
+
+    // 更新 logo 文本
+    const logoTitle = document.querySelector('.logo h1');
+    if (logoTitle) {
+        logoTitle.textContent = "今日热搜榜";
+    }
+
+    // 确保 logo 图标是火焰
+    const logoIcon = document.querySelector('.logo .icon');
+    if (logoIcon) {
+        logoIcon.textContent = "🔥";
+    }
 }); 
