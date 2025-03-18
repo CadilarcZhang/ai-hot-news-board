@@ -32,6 +32,56 @@ document.addEventListener('DOMContentLoaded', function() {
     const urlParams = new URLSearchParams(window.location.search);
     const targetNewsId = urlParams.get('newsId');
     
+    // 主题切换功能
+    initThemeToggle();
+    
+    // 初始化主题切换功能
+    function initThemeToggle() {
+        const themeToggleBtn = document.getElementById('theme-toggle');
+        if (!themeToggleBtn) return;
+        
+        // 检查本地存储中的主题设置
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            document.body.classList.add('dark-mode');
+            applyDarkMode(true);
+        }
+        
+        // 添加点击事件
+        themeToggleBtn.addEventListener('click', function() {
+            document.body.classList.toggle('dark-mode');
+            
+            // 更新所有需要暗黑模式的元素
+            const isDarkMode = document.body.classList.contains('dark-mode');
+            applyDarkMode(isDarkMode);
+            
+            // 保存主题设置到本地存储
+            localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+        });
+    }
+    
+    // 应用深色模式到所有元素
+    function applyDarkMode(isDarkMode) {
+        const elements = [
+            '.content-area', '.news-content', '.placeholder', 
+            '.image-container', 'header', 'main', '.left-panel', 
+            '.hot-item', '.platform-tab', '.text-content',
+            '.author-info', '.author-meta', '.share-btn',
+            '.loading', '.error-container', '.mobile-content',
+            '.mobile-header', '.mobile-text-content'
+        ];
+        
+        elements.forEach(selector => {
+            document.querySelectorAll(selector).forEach(el => {
+                if (isDarkMode) {
+                    el.classList.add('dark-mode');
+                } else {
+                    el.classList.remove('dark-mode');
+                }
+            });
+        });
+    }
+    
     // 获取热搜数据
     function fetchHotNews(platform = 'weibo') {
         // 更新当前平台
@@ -291,6 +341,41 @@ document.addEventListener('DOMContentLoaded', function() {
                 fetchHotNews(platform);
             });
         });
+        
+        // 添加刷新按钮功能
+        const refreshBtn = document.querySelector('.refresh-btn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', function() {
+                const icon = this.querySelector('i');
+                if (icon) {
+                    icon.classList.add('rotating');
+                    
+                    setTimeout(() => {
+                        icon.classList.remove('rotating');
+                    }, 1000);
+                }
+                
+                fetchHotNews(currentPlatform);
+            });
+        }
+        
+        // 添加CSS动画
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes rotating {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            .rotating {
+                animation: rotating 1s linear;
+            }
+            .loading-list {
+                text-align: center;
+                padding: 20px;
+                color: #999;
+            }
+        `;
+        document.head.appendChild(style);
     }
     
     // 初始化
