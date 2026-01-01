@@ -790,6 +790,35 @@ document.addEventListener('DOMContentLoaded', function() {
                     // 显示缓存的内容
                     loadingElement.style.display = 'none';
                     aiContent.style.display = 'block';
+                    // firstParagraph.style.display = 'none';
+                    
+                    // 如果有缓存的参考来源信息，先显示
+                    if (cachedData.articles && cachedData.articles.length > 0) {
+                        const sourcesContainer = newsContent.querySelector('.article-sources');
+                        if (!sourcesContainer) {
+                            // 创建链接容器
+                            const sourcesDiv = document.createElement('div');
+                            sourcesDiv.className = 'article-sources';
+                            sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
+                            // 插入到内容容器之前
+                            contentContainer.parentNode.insertBefore(sourcesDiv, contentContainer);
+                        }
+                        
+                        const linksContainer = newsContent.querySelector('.sources-links');
+                        if (linksContainer) {
+                            linksContainer.innerHTML = '';
+                            cachedData.articles.forEach((article, index) => {
+                                const linkElement = document.createElement('a');
+                                linkElement.href = article.link;
+                                linkElement.target = '_blank';
+                                linkElement.rel = 'noopener noreferrer';
+                                linkElement.className = 'source-link';
+                                linkElement.textContent = `${index + 1}. ${article.title}`;
+                                linksContainer.appendChild(linkElement);
+                            });
+                        }
+                    }
+                    
                     contentContainer.innerHTML = formatContent(cachedData.content);
                     
                     // 生成图片
@@ -819,6 +848,7 @@ document.addEventListener('DOMContentLoaded', function() {
         imageContainer.innerHTML = '';
         imageContainer.innerHTML = '<div class="image-loading"></div>';
         let fullContent = '';
+        let cachedArticles = []; // 保存参考来源信息
         
         generateImageForContent(newsId, title, fullContent, heat);
         
@@ -854,6 +884,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     // 处理文章链接信息
                     if (data.type === 'sources' && data.articles && data.articles.length > 0) {
+                        // 保存参考来源信息
+                        cachedArticles = data.articles;
+                        
                         // 在内容容器上方显示文章链接
                         const sourcesContainer = newsContent.querySelector('.article-sources');
                         if (!sourcesContainer) {
@@ -886,15 +919,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     if (data.done) {
-                        // 保存到本地缓存
+                        // 保存到本地缓存（包括参考来源信息）
                         if (fullContent.trim().length > 0) {
                             try {
                                 const cacheData = {
                                     content: fullContent,
+                                    articles: cachedArticles, // 保存参考来源信息
                                     expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
-                                console.log(`内容已保存到本地缓存: ${title}`);
+                                console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
                             } catch (e) {
                                 console.error('保存到本地缓存失败:', e);
                             }
@@ -1303,8 +1337,37 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     // 显示缓存的内容
                     loading.style.display = 'none';
-                    textContent.innerHTML = formatContent(cachedData.content);
                     
+                    // 如果有缓存的参考来源信息，先显示
+                    if (cachedData.articles && cachedData.articles.length > 0) {
+                        const sourcesContainer = mobileContent.querySelector('.article-sources');
+                        if (!sourcesContainer) {
+                            // 创建链接容器
+                            const sourcesDiv = document.createElement('div');
+                            sourcesDiv.className = 'article-sources';
+                            sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
+                            // 插入到文本内容之前
+                            textContent.parentNode.insertBefore(sourcesDiv, textContent);
+                        }
+                        
+                        const linksContainer = mobileContent.querySelector('.sources-links');
+                        if (linksContainer) {
+                            linksContainer.innerHTML = '';
+                            cachedData.articles.forEach((article, index) => {
+                                const linkElement = document.createElement('a');
+                                linkElement.href = article.link;
+                                linkElement.target = '_blank';
+                                linkElement.rel = 'noopener noreferrer';
+                                linkElement.className = 'source-link';
+                                linkElement.textContent = `${index + 1}. ${article.title}`;
+                                linksContainer.appendChild(linkElement);
+                            });
+                        }
+                    }
+                    
+                    textContent.innerHTML = formatContent(cachedData.content);
+                    // const firstParagraph = mobileContent.querySelector('.first-paragraph');
+                    // firstParagraph.style.display = 'none';
                     // 生成图片
                     generateMobileImage(newsId, title, cachedData.content, heat, imageContainer);
                     
@@ -1320,6 +1383,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         let fullContent = '';
+        let cachedArticles = []; // 保存参考来源信息
 
         // 生成图片
         generateMobileImage(newsId, title, fullContent, heat, imageContainer);
@@ -1354,6 +1418,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     // 处理文章链接信息（移动端）
                     if (data.type === 'sources' && data.articles && data.articles.length > 0) {
+                        // 保存参考来源信息
+                        cachedArticles = data.articles;
+                        
                         // 在内容容器上方显示文章链接
                         const sourcesContainer = mobileContent.querySelector('.article-sources');
                         if (!sourcesContainer) {
@@ -1380,21 +1447,25 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                     
+                    if (data.message) {
+                        textContent.innerHTML += formatContent(data.message);
+                    }
                     if (data.content) {
                         fullContent += data.content;
                         textContent.innerHTML = formatContent(fullContent);
                     }
                     
                     if (data.done) {
-                        // 保存到本地缓存
+                        // 保存到本地缓存（包括参考来源信息）
                         if (fullContent.trim().length > 0) {
                             try {
                                 const cacheData = {
                                     content: fullContent,
+                                    articles: cachedArticles, // 保存参考来源信息
                                     expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
-                                console.log(`内容已保存到本地缓存: ${title}`);
+                                console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
                             } catch (e) {
                                 console.error('保存到本地缓存失败:', e);
                             }

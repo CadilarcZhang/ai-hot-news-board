@@ -858,19 +858,19 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     // 设置超时
     const timeout = setTimeout(() => {
         if (!isResponseEnded) {
-            safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，搜索和生成内容超时。🕒\n\n" })}\n\n`);
-            safeWrite(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ message: "\n\n很抱歉，搜索和生成内容超时。🕒\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ message: "当前服务繁忙，请稍后再试。" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
             safeEnd();
         }
     }, 60000); // 60秒超时（搜索需要更长时间）
     
     // 定义articlesData变量，以便在后续作用域中使用
-    let articlesData = { content: null, articles: [] };
+    let articlesData = { content: null, articles: [], message: null };
     
     try {
         // 步骤1: 发送搜索提示
-        safeWrite(`data: ${JSON.stringify({ content: "🔍 正在搜索相关新闻..." })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
         
         // 步骤2: 搜索并抓取文章内容
         articlesData = await fetchMultipleArticles(title);
@@ -887,13 +887,13 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         const articlesContent = articlesData.content;
         if (!articlesContent || articlesContent.length < 200) {
             clearTimeout(timeout);
-            safeWrite(`data: ${JSON.stringify({ content: "\n\n⚠️ 未能找到足够的新闻内容，将使用AI生成解读。\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ message: "\n\n⚠️ 未能找到足够的新闻内容，将使用AI生成解读。\n\n" })}\n\n`);
             
             // 如果搜索失败，回退到原有的生成方式
             // 这里可以调用原有的生成逻辑，或者直接结束
             // 为了保持功能独立，我们继续使用搜索到的内容，即使内容较少
         } else {
-            safeWrite(`data: ${JSON.stringify({ content: "✅ 已找到相关新闻，正在生成摘要...\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ message: "✅ 已找到相关新闻，正在生成摘要...\n\n" })}\n\n`);
         }
         
         // 步骤3: 使用AI对抓取的内容进行摘要
@@ -1101,7 +1101,7 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "Qwen/Qwen-Image",
+                "model": "Kwai-Kolors/Kolors", // 备用Qwen/Qwen-Image(成本略高)
                 "prompt": prompt,
                 "negative_prompt": "低质量，模糊，变形，文字，水印",
                 "image_size": "1024x1024",
