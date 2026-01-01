@@ -669,12 +669,157 @@ async function searchNews(query) {
 }
 
 /**
+ * 抓取网页主要内容
+ * @param {string} url - 网页URL
+ * @returns {Promise<string>} 返回网页主要内容文本
+ */
+async function fetchArticleContent(url) {
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.baidu.com/'
+            },
+            timeout: 10000,
+            maxRedirects: 5
+        });
+        
+        const $ = cheerio.load(response.data);
+        
+        // 移除不需要的元素
+        $('script, style, nav, header, footer, aside, .ad, .advertisement, .comment, .comments').remove();
+        
+        // 尝试多种选择器来提取主要内容
+        let content = '';
+        
+        // 方法1: 查找常见的文章内容选择器
+        const contentSelectors = [
+            'article',
+            'section',
+            '.pages_content',
+            '.article-content',
+            '.content',
+            '.post-content',
+            '.entry-content',
+            '#content', 
+            '.main-content',
+            '.news-content',
+            '.article-body',
+            '.article-text',    
+            'p'
+        ];
+        
+        for (const selector of contentSelectors) {
+            const $content = $(selector);
+            if ($content.length > 0) {
+                content = $content.text().trim();
+                if (content.length > 200) { // 确保内容足够长
+                    break;
+                }
+            }
+        }
+        
+        // 方法2: 如果没找到，尝试提取所有段落
+        if (content.length < 200) {
+            const paragraphs = [];
+            $('p').each((index, el) => {
+                const text = $(el).text().trim();
+                if (text.length > 50) { // 过滤太短的段落
+                    paragraphs.push(text);
+                }
+            });
+            content = paragraphs.join('\n\n');
+        }
+        
+        // 清理内容：移除多余空白、换行
+        content = content.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim();
+        
+        // 限制内容长度（避免token过多）
+        if (content.length > 5000) {
+            content = content.substring(0, 5000) + '...';
+        }
+        
+        return content;
+    } catch (error) {
+        console.error(`抓取网页内容失败 (${url}):`, error.message);
+        return '';
+    }
+}
+
+/**
+ * 从多个搜索结果中提取并合并内容
+ * @param {string} query - 搜索关键词
+ * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
+ */
+async function fetchMultipleArticles(query) {
+    try {
+        // 搜索相关新闻
+        const searchResults = await searchNews(query);
+        
+        if (searchResults.length === 0) {
+            return { content: null, articles: [] };
+    }
+        
+        // 抓取前3个搜索结果的内容
+        const articles = [];
+        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
+            const result = searchResults[i];
+            // console.log(`正在抓取: ${result.title} - ${result.link}`);
+            
+            const content = await fetchArticleContent(result.link);
+            console.log("网页抓取文章内容: " + content);
+            if (content && content.length > 200) {
+                articles.push({
+                    title: result.title,
+                    content: content,
+                    source: result.link
+                });
+            }
+            
+            // 避免请求过快
+            if (i < Math.min(3, searchResults.length) - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        
+        if (articles.length === 0) {
+            return { content: null, articles: [] };
+        }
+        console.log("articles: " + JSON.stringify(articles));
+        
+        // 合并多篇文章内容
+        let combinedContent = `根据搜索关键词"${query}"，我找到了以下相关新闻文章：\n\n`;
+        
+        articles.forEach((article, index) => {
+            combinedContent += `【文章${index + 1}】${article.title}\n`;
+            combinedContent += `来源：${article.source}\n\n`;
+            combinedContent += `${article.content}\n\n`;
+            combinedContent += '---\n\n';
+        });
+        
+        // 返回内容和文章信息
+        return {
+            content: combinedContent,
+            articles: articles.map(article => ({
+                title: article.title,
+                link: article.source
+            }))
+        };
+    } catch (error) {
+        console.error('获取多篇文章失败:', error);
+        return { content: null, articles: [] };
+    }
+}
+
+/**
  * 抓取网页主要内容（带重试机制）
  * @param {string} url - 网页URL
  * @param {number} retries - 重试次数，默认2次
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContent(url, retries = 2) {
+async function fetchArticleContentWithRetry(url, retries = 2) {
     // 验证和清理URL
     if (!url || !url.startsWith('http')) {
         console.error(`无效的URL: ${url}`);
@@ -858,7 +1003,7 @@ async function fetchArticleContent(url, retries = 2) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticles(query) {
+async function fetchMultipleArticlesWithRetry(query) {
     try {
         // 搜索相关新闻
         const searchResults = await searchNews(query);
@@ -879,7 +1024,7 @@ async function fetchMultipleArticles(query) {
             // 并发抓取当前批次
             const batchPromises = batch.map(async (result, index) => {
                 console.log(`正在抓取 [${i + index + 1}/${articlesToFetch}]: ${result.title}`);
-                const content = await fetchArticleContent(result.link, 2); // 最多重试2次
+                const content = await fetchArticleContentWithRetry(result.link, 2); // 最多重试2次
                 
                 if (content && content.length > 200) {
                     return {
@@ -1041,9 +1186,9 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     try {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
-        
+        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
         // 步骤2: 搜索并抓取文章内容
-        articlesData = await fetchMultipleArticles(title);
+        articlesData = GOOGLE_SEARCH_SWITCH ? await fetchMultipleArticlesWithRetry(title) : await fetchMultipleArticles(title);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
         // 发送文章链接信息（如果有）
