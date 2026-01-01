@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
+const cheerio = require('cheerio');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -520,6 +521,498 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         // 发送友好的错误提示
         safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
         safeWrite(`data: ${JSON.stringify({ content: "我们的系统遇到了一些技术问题，请稍后再试。感谢您的理解和耐心。" })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+        safeEnd();
+    }
+});
+
+// ==================== 联网搜索和内容抓取工具函数 ====================
+
+/**
+ * 搜索新闻文章
+ * @param {string} query - 搜索关键词
+ * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
+ */
+async function searchNews(query) {
+    try {
+        // 方法1: 使用Google Custom Search API（如果配置了）
+        const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
+        const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID;
+        
+        if (GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
+            try {
+                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5`;
+                const googleResponse = await axios.get(googleUrl, { timeout: 10000 });
+                
+                if (googleResponse.data.items && googleResponse.data.items.length > 0) {
+                    return googleResponse.data.items.map(item => ({
+                        title: item.title,
+                        link: item.link,
+                        snippet: item.snippet || ''
+                    }));
+                }
+            } catch (googleError) {
+                console.error('Google搜索失败，尝试备用方法:', googleError.message);
+            }
+        }
+        
+        // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
+        try {
+            const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
+            
+            const response = await axios.get(searchUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'Referer': 'https://www.baidu.com/'
+                },
+                timeout: 10000,
+                maxRedirects: 5
+            });
+            
+            const $ = cheerio.load(response.data);
+            const results = [];
+            
+            // 解析百度搜索结果 - 尝试多种选择器
+            $('.result, .c-result, .result-op').each((index, element) => {
+                if (results.length >= 5) return false; // 最多取5个结果
+                
+                const $el = $(element);
+                const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
+                let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
+                const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
+                
+                if (title && link) {
+                    // 处理百度跳转链接
+                    if (link.startsWith('/link?url=')) {
+                        // 尝试提取真实URL
+                        try {
+                            const urlMatch = link.match(/url=([^&]+)/);
+                            if (urlMatch) {
+                                link = decodeURIComponent(urlMatch[1]);
+                            }
+                        } catch (e) {
+                            // 如果解析失败，跳过这个结果
+                            return;
+                        }
+                    }
+                    
+                    if (link && link.startsWith('http')) {
+                        results.push({
+                            title,
+                            link: link,
+                            snippet: snippet || title
+                        });
+                    }
+                }
+            });
+            console.log("百度搜索结果: " + JSON.stringify(results));
+            if (results.length > 0) {
+                return results;
+            }
+        } catch (baiduError) {
+            console.error('百度搜索失败:', baiduError.message);
+        }
+        
+        // 如果都失败了，返回空数组
+        return [];
+    } catch (error) {
+        console.error('搜索新闻失败:', error);
+        return [];
+    }
+}
+
+/**
+ * 抓取网页主要内容
+ * @param {string} url - 网页URL
+ * @returns {Promise<string>} 返回网页主要内容文本
+ */
+async function fetchArticleContent(url) {
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.baidu.com/'
+            },
+            timeout: 10000,
+            maxRedirects: 5
+        });
+        
+        const $ = cheerio.load(response.data);
+        
+        // 移除不需要的元素
+        $('script, style, nav, header, footer, aside, .ad, .advertisement, .comment, .comments').remove();
+        
+        // 尝试多种选择器来提取主要内容
+        let content = '';
+        
+        // 方法1: 查找常见的文章内容选择器
+        const contentSelectors = [
+            'article',
+            '.article-content',
+            '.content',
+            '.post-content',
+            '.entry-content',
+            '#content',
+            '.main-content',
+            '.news-content',
+            '.article-body',
+            '.article-text'
+        ];
+        
+        for (const selector of contentSelectors) {
+            const $content = $(selector);
+            if ($content.length > 0) {
+                content = $content.text().trim();
+                if (content.length > 200) { // 确保内容足够长
+                    break;
+                }
+            }
+        }
+        
+        // 方法2: 如果没找到，尝试提取所有段落
+        if (content.length < 200) {
+            const paragraphs = [];
+            $('p').each((index, el) => {
+                const text = $(el).text().trim();
+                if (text.length > 50) { // 过滤太短的段落
+                    paragraphs.push(text);
+                }
+            });
+            content = paragraphs.join('\n\n');
+        }
+        
+        // 清理内容：移除多余空白、换行
+        content = content.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim();
+        
+        // 限制内容长度（避免token过多）
+        if (content.length > 5000) {
+            content = content.substring(0, 5000) + '...';
+        }
+        
+        return content;
+    } catch (error) {
+        console.error(`抓取网页内容失败 (${url}):`, error.message);
+        return '';
+    }
+}
+
+/**
+ * 从多个搜索结果中提取并合并内容
+ * @param {string} query - 搜索关键词
+ * @returns {Promise<string>} 返回合并后的文章内容
+ */
+async function fetchMultipleArticles(query) {
+    try {
+        // 搜索相关新闻
+        const searchResults = await searchNews(query);
+        
+        if (searchResults.length === 0) {
+            return null;
+        }
+        
+        // 抓取前3个搜索结果的内容
+        const articles = [];
+        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
+            const result = searchResults[i];
+            // console.log(`正在抓取: ${result.title} - ${result.link}`);
+            
+            const content = await fetchArticleContent(result.link);
+            console.log("网页抓取文章内容: " + content);
+            if (content && content.length > 200) {
+                articles.push({
+                    title: result.title,
+                    content: content,
+                    source: result.link
+                });
+            }
+            
+            // 避免请求过快
+            if (i < Math.min(3, searchResults.length) - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        
+        if (articles.length === 0) {
+            return null;
+        }
+        console.log("articles: " + JSON.stringify(articles));
+        // 合并多篇文章内容
+        let combinedContent = `根据搜索关键词"${query}"，我找到了以下相关新闻文章：\n\n`;
+        
+        articles.forEach((article, index) => {
+            combinedContent += `【文章${index + 1}】${article.title}\n`;
+            combinedContent += `来源：${article.source}\n\n`;
+            combinedContent += `${article.content}\n\n`;
+            combinedContent += '---\n\n';
+        });
+        return combinedContent;
+    } catch (error) {
+        console.error('获取多篇文章失败:', error);
+        return null;
+    }
+}
+
+// ==================== 基于联网搜索的内容生成API ====================
+
+// 流式生成AI内容的接口（基于联网搜索）- 使用SSE
+app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
+    const title = req.query.title;
+    
+    if (!title) {
+        return res.status(400).json({ error: '标题不能为空' });
+    }
+    
+    // 设置SSE响应头
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('X-Vercel-Cache-Control', 'no-cache');
+    
+    // 定义响应状态和工具函数
+    let isResponseEnded = false;
+    
+    const safeWrite = (data) => {
+        if (!isResponseEnded && !res.writableEnded && res.writable) {
+            try {
+                const dataStr = typeof data === 'string' ? data : String(data);
+                res.write(dataStr, 'utf8');
+            } catch (error) {
+                console.error('写入响应时出错:', error);
+                isResponseEnded = true;
+            }
+        }
+    };
+    
+    const safeEnd = () => {
+        if (!isResponseEnded && !res.writableEnded && res.writable) {
+            try {
+                isResponseEnded = true;
+                res.end();
+            } catch (error) {
+                console.error('结束响应时出错:', error);
+            }
+        }
+    };
+    
+    // 检查缓存
+    const cacheKey = `content-search-${title}`;
+    let cachedContent = simpleCache.get(cacheKey);
+    
+    if (cachedContent) {
+        console.log(`从缓存获取搜索生成内容: ${title}`);
+        // 分段发送缓存内容
+        const chunks = cachedContent.split('\n');
+        safeWrite(`data: ${JSON.stringify({ content: chunks[0] })}\n\n`);
+        
+        let i = 1;
+        const sendNextChunk = () => {
+            if (i < chunks.length && !res.writableEnded) {
+                if (chunks[i].trim()) {
+                    safeWrite(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
+                }
+                i++;
+                setTimeout(sendNextChunk, 100);
+            } else if (!res.writableEnded) {
+                safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                safeEnd();
+            }
+        };
+        setTimeout(sendNextChunk, 100);
+        return;
+    }
+    
+    req.on('close', () => {
+        isResponseEnded = true;
+        console.log('客户端断开连接');
+    });
+    
+    // 设置超时
+    const timeout = setTimeout(() => {
+        if (!isResponseEnded) {
+            safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，搜索和生成内容超时。🕒\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+            safeEnd();
+        }
+    }, 60000); // 60秒超时（搜索需要更长时间）
+    
+    try {
+        // 步骤1: 发送搜索提示
+        safeWrite(`data: ${JSON.stringify({ content: "🔍 正在搜索相关新闻..." })}\n\n`);
+        
+        // 步骤2: 搜索并抓取文章内容
+        const articlesContent = await fetchMultipleArticles(title);
+        console.log("合并多篇文章内容: " + JSON.stringify(articlesContent));
+        if (!articlesContent || articlesContent.length < 200) {
+            clearTimeout(timeout);
+            safeWrite(`data: ${JSON.stringify({ content: "\n\n⚠️ 未能找到足够的新闻内容，将使用AI生成解读。\n\n" })}\n\n`);
+            
+            // 如果搜索失败，回退到原有的生成方式
+            // 这里可以调用原有的生成逻辑，或者直接结束
+            // 为了保持功能独立，我们继续使用搜索到的内容，即使内容较少
+        } else {
+            safeWrite(`data: ${JSON.stringify({ content: "✅ 已找到相关新闻，正在生成摘要...\n\n" })}\n\n`);
+        }
+        
+        // 步骤3: 使用AI对抓取的内容进行摘要
+        const prompt = articlesContent 
+            ? `请基于以下真实新闻文章内容，为热搜话题"${title}"生成一份准确、客观的新闻摘要。要求：
+1. 基于提供的真实新闻内容，不要编造信息
+2. 提取关键事实和数据
+3. 分析事件的影响和意义
+4. 语言生动有趣，包含适当的表情符号
+5. 至少3-4个段落，每个段落3-4句话
+6. 直接给出最终内容，不要有思考过程
+
+真实新闻内容：
+${articlesContent}
+
+请生成摘要：`
+            : `请为热搜话题"${title}"生成一份新闻解读。由于未能获取到足够的真实新闻内容，请基于你的知识生成一份客观的分析。要求语言生动有趣，包含表情符号，至少3-4个段落。`;
+        
+        // 创建AI API请求
+        const response = await axios({
+            method: 'post',
+            url: 'https://api.siliconflow.cn/v1/chat/completions',
+            headers: {
+                'Authorization': `Bearer ${AI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            data: {
+                "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "你是一位专业的新闻摘要专家，擅长基于真实新闻内容生成准确、客观的摘要。你会仔细分析提供的新闻内容，提取关键信息，并生成结构清晰、语言生动的摘要。"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "stream": true,
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "response_format": {
+                    "type": "text"
+                }
+            },
+            responseType: 'stream',
+            timeout: 30000
+        });
+        
+        clearTimeout(timeout);
+        
+        let fullContent = '';
+        let buffer = '';
+        
+        // 处理流式响应
+        response.data.on('data', (chunk) => {
+            if (isResponseEnded) return;
+            
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            
+            for (const line of lines) {
+                if (isResponseEnded) break;
+                if (line.trim() === '') continue;
+                
+                if (line.startsWith('data: ')) {
+                    const data = line.substring(6).trim();
+                    
+                    if (data === '[DONE]') {
+                        if (fullContent.trim().length > 0) {
+                            simpleCache.set(cacheKey, fullContent, 86400);
+                        }
+                        safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                        safeEnd();
+                        return;
+                    }
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        if (parsed.choices && 
+                            parsed.choices[0] && 
+                            parsed.choices[0].delta && 
+                            parsed.choices[0].delta.content) {
+                            
+                            const content = parsed.choices[0].delta.content;
+                            if (content) {
+                                fullContent += content;
+                                safeWrite(`data: ${JSON.stringify({ content })}\n\n`);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('解析JSON出错:', e);
+                    }
+                }
+            }
+        });
+        
+        response.data.on('end', () => {
+            if (buffer.trim() && !isResponseEnded) {
+                const lines = buffer.split('\n');
+                for (const line of lines) {
+                    if (line.trim() === '' || isResponseEnded) continue;
+                    if (line.startsWith('data: ')) {
+                        const data = line.substring(6).trim();
+                        if (data === '[DONE]') {
+                            if (fullContent.trim().length > 0) {
+                                simpleCache.set(cacheKey, fullContent, 86400);
+                            }
+                            break;
+                        }
+                        try {
+                            const parsed = JSON.parse(data);
+                            if (parsed.choices && 
+                                parsed.choices[0] && 
+                                parsed.choices[0].delta && 
+                                parsed.choices[0].delta.content) {
+                                const content = parsed.choices[0].delta.content;
+                                if (content) {
+                                    fullContent += content;
+                                    safeWrite(`data: ${JSON.stringify({ content })}\n\n`);
+                                }
+                            }
+                        } catch (e) {
+                            console.error('处理缓冲区数据时出错:', e);
+                        }
+                    }
+                }
+            }
+            
+            if (!isResponseEnded) {
+                if (fullContent.trim().length > 0) {
+                    simpleCache.set(cacheKey, fullContent, 86400);
+                }
+                safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                safeEnd();
+            }
+        });
+        
+        response.data.on('error', (err) => {
+            if (isResponseEnded) return;
+            clearTimeout(timeout);
+            console.error('流处理错误:', err);
+            safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，生成摘要时出错。🔄\n\n" })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+            safeEnd();
+        });
+        
+    } catch (error) {
+        clearTimeout(timeout);
+        if (isResponseEnded) return;
+        
+        console.error('基于搜索的内容生成失败:', error);
+        safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ content: "请稍后再试或使用普通生成模式。" })}\n\n`);
         safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
         safeEnd();
     }

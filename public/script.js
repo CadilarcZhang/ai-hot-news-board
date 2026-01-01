@@ -829,8 +829,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         try {
+            // 检查是否启用联网搜索模式
+            const searchModeToggle = document.getElementById('search-mode-toggle');
+            const useSearchMode = searchModeToggle && searchModeToggle.checked;
+            const apiEndpoint = useSearchMode 
+                ? `${SERVER_URL}/api/generate-with-search?title=${encodeURIComponent(title)}`
+                : `${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`;
+            
             // 方法1: 使用EventSource (SSE)
-            const eventSource = new EventSource(`${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`);
+            const eventSource = new EventSource(apiEndpoint);
             eventSources[newsId] = eventSource;
             
             aiContent.style.display = 'none';
@@ -1247,8 +1254,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         try {
+            // 检查是否启用联网搜索模式
+            const searchModeToggle = document.getElementById('search-mode-toggle');
+            const useSearchMode = searchModeToggle && searchModeToggle.checked;
+            const apiEndpoint = useSearchMode 
+                ? `${SERVER_URL}/api/generate-with-search?title=${encodeURIComponent(title)}`
+                : `${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`;
+            
             // 使用EventSource (SSE)
-            const eventSource = new EventSource(`${SERVER_URL}/api/generate?title=${encodeURIComponent(title)}`);
+            const eventSource = new EventSource(apiEndpoint);
             eventSources[`mobile-${newsId}`] = eventSource;
             
             eventSource.onopen = (evt) => {

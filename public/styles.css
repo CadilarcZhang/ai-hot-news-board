@@ -30,6 +30,7 @@ header {
     position: relative;
     padding-top: 10px;
     padding-bottom: 20px;
+    padding-right: 200px; /* 为右侧控件留出空间 */
 }
 
 .logo {
@@ -53,6 +54,54 @@ header h1 {
     color: #666;
     font-size: 1rem;
     margin-bottom: 15px;
+}
+
+/* 头部控制区域 */
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    position: absolute;
+    top: 10px;
+    right: 0;
+}
+
+/* 模式切换开关 */
+.mode-switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.mode-switch input[type="checkbox"] {
+    display: none;
+}
+
+.mode-label {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    color: #666;
+    background-color: #f0f0f0;
+    transition: all 0.3s ease;
+}
+
+.mode-switch input[type="checkbox"]:checked + .mode-label {
+    background-color: #ff3852;
+    color: #fff;
+    font-weight: 500;
+}
+
+.mode-switch:hover .mode-label {
+    background-color: #e0e0e0;
+}
+
+.mode-switch input[type="checkbox"]:checked + .mode-label:hover {
+    background-color: #e62e42;
 }
 
 .actions {
@@ -430,12 +479,20 @@ footer {
         padding: 25px 20px 30px;
     }
     
+    .header-controls {
+        position: static;
+        margin-top: 10px;
+        justify-content: center;
+    }
+    
     .theme-toggle {
-        position: absolute;
-        top: 10px;
-        right: 10px;
+        position: static;
         width: 36px;
         height: 36px;
+    }
+    
+    header {
+        padding-right: 20px;
     }
 }
 
