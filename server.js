@@ -2,10 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
+// 如果 BASE_PATH 为空字符串，则使用 '/' 作为静态文件路径
 const BASE_PATH = process.env.BASE_PATH !== undefined ? process.env.BASE_PATH : '/hot-news';
+const STATIC_PATH = BASE_PATH || '/';
 
 // 增强缓存对象，添加更多功能
 const enhancedCache = {
@@ -156,11 +159,36 @@ console.log('静态文件目录:', path.join(__dirname, 'public'));
 console.log('基础路径:', BASE_PATH);
 
 // 提供静态文件，注意路径前缀
-app.use(`${BASE_PATH}`, express.static(path.join(__dirname, 'public'), {
+// 在 Vercel 上，BASE_PATH 为空时使用根路径
+app.use(STATIC_PATH, express.static(path.join(__dirname, 'public'), {
     index: 'index.html',
     extensions: ['html'],
     maxAge: '1d'
 }));
+
+// 如果 BASE_PATH 不为空，同时提供根路径的静态文件服务（用于本地开发）
+// 这样无论 HTML 中使用绝对路径还是相对路径都能工作
+// 只提供静态资源文件（js, css, 图片等），不提供 HTML 文件
+if (BASE_PATH && BASE_PATH !== '/') {
+    // 创建一个静态文件中间件，只处理静态资源
+    const staticMiddleware = express.static(path.join(__dirname, 'public'), {
+        index: false, // 不提供 index.html
+        maxAge: '1d'
+    });
+    
+    app.use('/', (req, res, next) => {
+        // 只处理静态资源文件请求，不处理 HTML 或其他路由
+        const staticExtensions = ['.js', '.css', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webmanifest', '.woff', '.woff2', '.ttf', '.eot'];
+        const hasStaticExtension = staticExtensions.some(ext => req.path.toLowerCase().endsWith(ext));
+        
+        if (hasStaticExtension) {
+            // 使用静态文件中间件提供文件
+            staticMiddleware(req, res, next);
+        } else {
+            next(); // 不是静态文件请求，继续到下一个中间件
+        }
+    });
+}
 
 // 添加一个测试路由
 app.get(`${BASE_PATH}/test`, (req, res) => {
@@ -497,19 +525,75 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
     }
 });
 
-// 添加对平台路径的支持
-app.get(`${BASE_PATH}/:platform?`, (req, res) => {
-    // 发送index.html文件
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 // 处理OPTIONS预检请求
-app.options(`${BASE_PATH}/api/*`, cors());
+app.options(`${BASE_PATH || ''}/api/*`, cors());
 
-// 添加根路径重定向
-app.get('/', (req, res) => {
-    res.redirect(BASE_PATH);
+// 处理 favicon.ico 请求（浏览器默认会请求这个）
+// 如果存在 favicon.ico 就提供，否则提供 favicon.svg
+app.get('/favicon.ico', (req, res) => {
+    const faviconPath = path.join(__dirname, 'public', 'favicon.ico');
+    const faviconSvgPath = path.join(__dirname, 'public', 'favicon.svg');
+    
+    if (fs.existsSync(faviconPath)) {
+        res.sendFile(faviconPath);
+    } else if (fs.existsSync(faviconSvgPath)) {
+        // 如果不存在 .ico 文件，提供 .svg 文件
+        res.type('image/svg+xml');
+        res.sendFile(faviconSvgPath);
+    } else {
+        res.status(204).end(); // 返回 204 No Content
+    }
 });
+
+// 如果 BASE_PATH 不为空，也处理 BASE_PATH 下的 favicon
+if (BASE_PATH && BASE_PATH !== '/') {
+    app.get(`${BASE_PATH}/favicon.ico`, (req, res) => {
+        const faviconPath = path.join(__dirname, 'public', 'favicon.ico');
+        const faviconSvgPath = path.join(__dirname, 'public', 'favicon.svg');
+        
+        if (fs.existsSync(faviconPath)) {
+            res.sendFile(faviconPath);
+        } else if (fs.existsSync(faviconSvgPath)) {
+            res.type('image/svg+xml');
+            res.sendFile(faviconSvgPath);
+        } else {
+            res.status(204).end();
+        }
+    });
+}
+
+// 添加对平台路径的支持（包括根路径）
+// 这个路由应该在所有 API 路由之后，作为 fallback
+if (BASE_PATH && BASE_PATH !== '/') {
+    // BASE_PATH 不为空时，处理 BASE_PATH 下的路径
+    app.get(`${BASE_PATH}/:platform?`, (req, res) => {
+        // 排除 API 路由
+        if (req.params.platform && req.params.platform.startsWith('api')) {
+            return res.status(404).send('Not found');
+        }
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    });
+    // 根路径重定向到 BASE_PATH
+    app.get('/', (req, res) => {
+        res.redirect(BASE_PATH);
+    });
+} else {
+    // BASE_PATH 为空时，直接处理根路径和其他路径
+    // 注意：这个路由会匹配所有路径，所以要放在最后
+    app.get('/:platform?', (req, res, next) => {
+        // 排除 API 路由和静态文件（静态文件应该已经被 express.static 处理）
+        if (req.params.platform) {
+            if (req.params.platform.startsWith('api')) {
+                return res.status(404).send('Not found');
+            }
+            // 检查是否是静态文件请求（包含扩展名）
+            if (req.params.platform.includes('.')) {
+                return res.status(404).send('Not found');
+            }
+        }
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    });
+}
 
 // 启动服务器
 app.listen(PORT, () => {
