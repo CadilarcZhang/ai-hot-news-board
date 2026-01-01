@@ -4,34 +4,23 @@
     {
       "src": "server.js",
       "use": "@vercel/node"
-    },
-    {
-      "src": "public/**",
-      "use": "@vercel/static"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/server.js",
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Accept",
-        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-        "X-Accel-Buffering": "no"
-      }
+      "dest": "/server.js"
     },
     {
-      "src": "/(.*)",
+      "src": "/(.*\\.(js|css|svg|webmanifest|ico|png|jpg|jpeg|gif))",
       "dest": "/public/$1"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/.*",
-      "dest": "/public/index.html"
+      "src": "/(.*)",
+      "dest": "/server.js"
     }
-  ]
+  ],
+  "env": {
+    "BASE_PATH": ""
+  }
 } 

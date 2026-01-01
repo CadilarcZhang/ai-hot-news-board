@@ -4,7 +4,8 @@ const axios = require('axios');
 const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
-const BASE_PATH = process.env.BASE_PATH || '/hot-news';
+// 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
+const BASE_PATH = process.env.BASE_PATH !== undefined ? process.env.BASE_PATH : '/hot-news';
 
 // 增强缓存对象，添加更多功能
 const enhancedCache = {
@@ -166,11 +167,11 @@ app.get(`${BASE_PATH}/test`, (req, res) => {
     res.send('服务器正在运行');
 });
 
-// 天行API密钥
-const TIANAPI_KEY = 'eb50731204ecb974aa2fcc8f22478f42';
+// 天行API密钥（优先使用环境变量）
+const TIANAPI_KEY = process.env.TIANAPI_KEY || 'eb50731204ecb974aa2fcc8f22478f42';
 
-// AI API密钥
-const AI_API_KEY = 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo';
+// AI API密钥（优先使用环境变量）
+const AI_API_KEY = process.env.AI_API_KEY || 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo';
 
 // 获取热搜数据的接口
 app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {

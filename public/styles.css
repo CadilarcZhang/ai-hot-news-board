@@ -1169,3 +1169,72 @@ body:not(.dark-mode) .image-loading::after {
         border-color: #999;
     }
 }
+
+/* 分享按钮样式 */
+.share-container {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding: 20px 0;
+    background-color: #f5f5f5;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.share-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 20px;
+    border-radius: 20px;
+    border: none;
+    background-color: #eee;
+    color: #333;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.share-btn:hover {
+    background-color: #ddd;
+}
+
+.share-icon {
+    margin-right: 5px;
+    font-style: normal;
+}
+
+/* 暗黑模式适配 */
+body.dark-mode .share-container {
+    background-color: #222;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.3);
+}
+
+body.dark-mode .share-btn {
+    background-color: #333;
+    color: #eee;
+}
+
+body.dark-mode .share-btn:hover {
+    background-color: #444;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .share-container {
+        padding: 15px 0;
+    }
+    
+    .share-btn {
+        padding: 8px 15px;
+        font-size: 12px;
+    }
+    
+    main {
+        margin-bottom: 60px; /* 为底部分享按钮留出空间 */
+    }
+}

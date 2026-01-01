@@ -35,6 +35,24 @@ document.addEventListener('DOMContentLoaded', function() {
     // 主题切换功能
     initThemeToggle();
     
+    // 添加分享功能（只初始化一次，使用事件委托）
+    initShareButtons();
+    
+    // 更新网站标题
+    document.title = "今日热搜榜";
+    
+    // 更新 logo 文本
+    const logoTitle = document.querySelector('.logo h1');
+    if (logoTitle) {
+        logoTitle.textContent = "今日热搜榜";
+    }
+    
+    // 确保 logo 图标是火焰
+    const logoIcon = document.querySelector('.logo .icon');
+    if (logoIcon) {
+        logoIcon.textContent = "🔥";
+    }
+    
     // 初始化主题切换功能
     function initThemeToggle() {
         const themeToggleBtn = document.getElementById('theme-toggle');
@@ -68,7 +86,8 @@ document.addEventListener('DOMContentLoaded', function() {
             '.hot-item', '.platform-tab', '.text-content',
             '.author-info', '.author-meta', '.share-btn',
             '.loading', '.error-container', '.mobile-content',
-            '.mobile-header', '.mobile-text-content'
+            '.mobile-header', '.mobile-text-content',
+            '.share-container', '.toast-message'
         ];
         
         elements.forEach(selector => {
@@ -81,6 +100,168 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
+    
+    // 初始化分享按钮功能（使用事件委托，只设置一次）
+    let shareButtonsInitialized = false;
+    function initShareButtons() {
+        // 防止重复初始化
+        if (shareButtonsInitialized) {
+            return;
+        }
+        
+        // 使用事件委托，在 share-container 上监听所有点击事件
+        const shareContainer = document.querySelector('.share-container');
+        if (!shareContainer) {
+            // 如果容器还没加载，稍后重试（最多重试3次）
+            let retryCount = 0;
+            const maxRetries = 3;
+            const retryInterval = setInterval(() => {
+                retryCount++;
+                const container = document.querySelector('.share-container');
+                if (container) {
+                    clearInterval(retryInterval);
+                    setupShareButtonListeners(container);
+                    shareButtonsInitialized = true;
+                } else if (retryCount >= maxRetries) {
+                    clearInterval(retryInterval);
+                    console.warn('分享容器未找到，分享功能可能不可用');
+                }
+            }, 100);
+            return;
+        }
+        
+        setupShareButtonListeners(shareContainer);
+        shareButtonsInitialized = true;
+    }
+    
+    // 设置分享按钮事件监听器（使用事件委托）
+    function setupShareButtonListeners(container) {
+        // 只在容器上添加一次事件监听器
+        container.addEventListener('click', function(e) {
+            const target = e.target.closest('.share-btn');
+            if (!target) return;
+            
+            // 根据按钮的类名或ID执行相应操作
+            if (target.classList.contains('copy-link') || target.id === 'copy-link-btn') {
+                // 复制链接
+                const url = window.location.href;
+                navigator.clipboard.writeText(url)
+                    .then(() => {
+                        showToast('链接已复制到剪贴板');
+                    })
+                    .catch(err => {
+                        console.error('复制失败:', err);
+                        fallbackCopyTextToClipboard(url);
+                    });
+            } else if (target.classList.contains('share-weibo') || target.id === 'share-weibo-btn') {
+                // 分享到微博
+                const url = encodeURIComponent(window.location.href);
+                const title = encodeURIComponent(document.title);
+                const weiboUrl = `https://service.weibo.com/share/share.php?url=${url}&title=${title}`;
+                window.open(weiboUrl, '_blank');
+            } else if (target.classList.contains('share-wechat') || target.id === 'share-wechat-btn') {
+                // 分享到微信
+                showToast('请使用微信扫一扫，扫描当前页面分享');
+            }
+        });
+    }
+    
+    // 创建提示框
+    function showToast(message) {
+        console.log('显示提示:', message);
+        // 移除可能存在的旧提示
+        const oldToast = document.querySelector('.toast-message');
+        if (oldToast) {
+            oldToast.remove();
+        }
+        
+        // 创建新提示
+        const toast = document.createElement('div');
+        toast.className = 'toast-message';
+        toast.textContent = message;
+        
+        // 添加到页面
+        document.body.appendChild(toast);
+        
+        // 添加显示类
+        setTimeout(() => {
+            toast.classList.add('show');
+        }, 10);
+        
+        // 3秒后移除
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => {
+                toast.remove();
+            }, 300);
+        }, 3000);
+    }
+    
+    // 备用复制方法
+    function fallbackCopyTextToClipboard(text) {
+        console.log('使用备用复制方法');
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        
+        // 设置样式使其不可见
+        textArea.style.position = 'fixed';
+        textArea.style.top = '0';
+        textArea.style.left = '0';
+        textArea.style.width = '2em';
+        textArea.style.height = '2em';
+        textArea.style.padding = '0';
+        textArea.style.border = 'none';
+        textArea.style.outline = 'none';
+        textArea.style.boxShadow = 'none';
+        textArea.style.background = 'transparent';
+        
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+            const successful = document.execCommand('copy');
+            if (successful) {
+                showToast('链接已复制到剪贴板');
+            } else {
+                showToast('复制失败，请手动复制');
+            }
+        } catch (err) {
+            console.error('复制失败:', err);
+            showToast('复制失败，请手动复制');
+        }
+        
+        document.body.removeChild(textArea);
+    }
+    
+    // 添加提示框样式
+    const toastStyle = document.createElement('style');
+    toastStyle.textContent = `
+        .toast-message {
+            position: fixed;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            z-index: 1000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .toast-message.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+        
+        body.dark-mode .toast-message {
+            background-color: rgba(255, 255, 255, 0.7);
+            color: black;
+        }
+    `;
+    document.head.appendChild(toastStyle);
     
     // 获取热搜数据
     function fetchHotNews(platform = 'weibo') {
@@ -756,6 +937,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         }
+        // 移除这里的 initShareButtons() 调用，因为已经在 DOMContentLoaded 中初始化了
     }
     
     // 创建移动端内容区域
@@ -1053,19 +1235,4 @@ document.addEventListener('DOMContentLoaded', function() {
             location.reload();
         }
     });
-
-    // 更新网站标题
-    document.title = "今日热搜榜";
-
-    // 更新 logo 文本
-    const logoTitle = document.querySelector('.logo h1');
-    if (logoTitle) {
-        logoTitle.textContent = "今日热搜榜";
-    }
-
-    // 确保 logo 图标是火焰
-    const logoIcon = document.querySelector('.logo .icon');
-    if (logoIcon) {
-        logoIcon.textContent = "🔥";
-    }
 }); 
