@@ -575,7 +575,7 @@ async function searchNews(query) {
                 });
                 
                 if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
-                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果`);
+                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${googleResponse.data.items}`);
                     return googleResponse.data.items.map(item => ({
                         title: item.title,
                         link: item.link,
@@ -668,83 +668,188 @@ async function searchNews(query) {
 }
 
 /**
- * 抓取网页主要内容
+ * 抓取网页主要内容（带重试机制）
  * @param {string} url - 网页URL
+ * @param {number} retries - 重试次数，默认2次
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContent(url) {
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Referer': 'https://www.baidu.com/'
-            },
-            timeout: 10000,
-            maxRedirects: 5
-        });
-        
-        const $ = cheerio.load(response.data);
-        
-        // 移除不需要的元素
-        $('script, style, nav, header, footer, aside, .ad, .advertisement, .comment, .comments').remove();
-        
-        // 尝试多种选择器来提取主要内容
-        let content = '';
-        
-        // 方法1: 查找常见的文章内容选择器
-        const contentSelectors = [
-            'article',
-            'section',
-            '.pages_content',
-            '.article-content',
-            '.content',
-            '.post-content',
-            '.entry-content',
-            '#content', 
-            '.main-content',
-            '.news-content',
-            '.article-body',
-            '.article-text',    
-            'p'
-        ];
-        
-        for (const selector of contentSelectors) {
-            const $content = $(selector);
-            if ($content.length > 0) {
-                content = $content.text().trim();
-                if (content.length > 200) { // 确保内容足够长
-                    break;
-                }
-            }
-        }
-        
-        // 方法2: 如果没找到，尝试提取所有段落
-        if (content.length < 200) {
-            const paragraphs = [];
-            $('p').each((index, el) => {
-                const text = $(el).text().trim();
-                if (text.length > 50) { // 过滤太短的段落
-                    paragraphs.push(text);
-                }
-            });
-            content = paragraphs.join('\n\n');
-        }
-        
-        // 清理内容：移除多余空白、换行
-        content = content.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim();
-        
-        // 限制内容长度（避免token过多）
-        if (content.length > 5000) {
-            content = content.substring(0, 5000) + '...';
-        }
-        
-        return content;
-    } catch (error) {
-        console.error(`抓取网页内容失败 (${url}):`, error.message);
+async function fetchArticleContent(url, retries = 2) {
+    // 验证和清理URL
+    if (!url || !url.startsWith('http')) {
+        console.error(`无效的URL: ${url}`);
         return '';
     }
+    
+    // 移除URL中的跟踪参数
+    try {
+        const urlObj = new URL(url);
+        // 移除常见的跟踪参数
+        ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'ref', '_ga'].forEach(param => {
+            urlObj.searchParams.delete(param);
+        });
+        url = urlObj.toString();
+    } catch (e) {
+        // URL解析失败，使用原始URL
+    }
+    
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            // 使用更真实的浏览器请求头
+            const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+                'Referer': 'https://www.google.com/'
+            };
+            
+            const response = await axios.get(url, {
+                headers: headers,
+                timeout: 15000, // 增加到15秒超时
+                maxRedirects: 5,
+                validateStatus: function (status) {
+                    // 接受2xx和3xx状态码
+                    return status >= 200 && status < 400;
+                },
+                // 自动解压gzip/deflate
+                decompress: true,
+                // 设置响应类型
+                responseType: 'text',
+                responseEncoding: 'utf8'
+            });
+        
+            const $ = cheerio.load(response.data, {
+                decodeEntities: false,
+                normalizeWhitespace: false
+            });
+            
+            // 移除不需要的元素（更全面的清理）
+            $('script, style, nav, header, footer, aside, .ad, .advertisement, .comment, .comments, .sidebar, .menu, .navigation, iframe, noscript, .social-share, .share-buttons, .related-articles, .tags, .author-info, .breadcrumb').remove();
+            
+            // 尝试多种选择器来提取主要内容（按优先级排序）
+            let content = '';
+            
+            // 方法1: 查找常见的文章内容选择器（按优先级）
+            const contentSelectors = [
+                'article .article-content',
+                'article .content',
+                'article',
+                'section',
+                '.article-content .text',
+                '.article-content',
+                '.pages_content',
+                '.post-content',
+                '.entry-content',
+                '.news-content',
+                '.article-body',
+                '.article-text',
+                '.content-body',
+                '#content .article',
+                '#content',
+                '.main-content',
+                'main article',
+                'main .content',
+                'main'
+            ];
+            
+            for (const selector of contentSelectors) {
+                const $content = $(selector).first();
+                if ($content.length > 0) {
+                    // 移除内部不需要的元素
+                    $content.find('script, style, .ad, .advertisement, .comment, .share, .social').remove();
+                    content = $content.text().trim();
+                    if (content.length > 300) { // 确保内容足够长
+                        break;
+                    }
+                }
+            }
+            
+            // 方法2: 如果没找到，尝试提取所有段落（智能过滤）
+            if (content.length < 300) {
+                const paragraphs = [];
+                $('p').each((index, el) => {
+                    const $p = $(el);
+                    const text = $p.text().trim();
+                    // 过滤条件：长度足够、不是导航链接、不是广告
+                    if (text.length > 50 && 
+                        !$p.closest('nav, .nav, .menu, .sidebar, .ad').length &&
+                        !text.match(/^(首页|关于|联系我们|隐私|条款)/) &&
+                        !text.match(/^[\d\s\-\.]+$/) // 不是纯数字
+                    ) {
+                        paragraphs.push(text);
+                    }
+                });
+                content = paragraphs.join('\n\n');
+            }
+            
+            // 方法3: 如果还是不够，尝试提取div中的文本（排除已知的非内容区域）
+            if (content.length < 300) {
+                const mainContent = [];
+                $('div').not('nav, header, footer, aside, .ad, .sidebar, .menu').each((index, el) => {
+                    const $div = $(el);
+                    const text = $div.text().trim();
+                    // 如果div包含多个段落，可能是主要内容
+                    if (text.length > 200 && $div.find('p').length >= 3) {
+                        mainContent.push(text);
+                    }
+                });
+                if (mainContent.length > 0) {
+                    // 选择最长的内容块
+                    content = mainContent.sort((a, b) => b.length - a.length)[0];
+                }
+            }
+            
+            // 清理内容：移除多余空白、换行，但保留段落结构
+            content = content
+                .replace(/\s{3,}/g, ' ') // 多个空格变为单个
+                .replace(/\n{3,}/g, '\n\n') // 多个换行变为两个
+                .replace(/[\r\n]+/g, '\n') // 统一换行符
+                .trim();
+            
+            // 如果成功获取到内容，返回
+            if (content.length > 200) {
+                // 限制内容长度（避免token过多）
+                if (content.length > 5000) {
+                    content = content.substring(0, 5000) + '...';
+                }
+                return content;
+            }
+            
+            // 如果内容太短，可能是提取失败，继续重试
+            if (attempt < retries) {
+                console.log(`内容提取不足 (${url})，尝试重试 ${attempt + 1}/${retries}`);
+                await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // 递增延迟
+                continue;
+            }
+            
+            return content; // 即使内容短也返回
+            
+        } catch (error) {
+            const isLastAttempt = attempt === retries;
+            const errorMsg = error.response 
+                ? `HTTP ${error.response.status}: ${error.response.statusText}`
+                : error.message;
+            
+            console.error(`抓取网页内容失败 (${url}) [尝试 ${attempt + 1}/${retries + 1}]:`, errorMsg);
+            
+            // 如果是最后一次尝试，返回空
+            if (isLastAttempt) {
+                return '';
+            }
+            
+            // 等待后重试（递增延迟：1s, 2s, 3s...）
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+    }
+    
+    return ''; // 所有重试都失败
 }
 
 /**
@@ -761,25 +866,45 @@ async function fetchMultipleArticles(query) {
             return { content: null, articles: [] };
         }
         
-        // 抓取前3个搜索结果的内容
+        // 抓取前3个搜索结果的内容（并发控制，但限制并发数）
         const articles = [];
-        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
-            const result = searchResults[i];
-            // console.log(`正在抓取: ${result.title} - ${result.link}`);
+        const maxConcurrent = 2; // 最多同时抓取2个
+        const articlesToFetch = Math.min(3, searchResults.length);
+        
+        // 分批处理，避免同时请求太多
+        for (let i = 0; i < articlesToFetch; i += maxConcurrent) {
+            const batch = searchResults.slice(i, i + maxConcurrent);
             
-            const content = await fetchArticleContent(result.link);
-            console.log("网页抓取文章内容: " + content);
-            if (content && content.length > 200) {
-                articles.push({
-                    title: result.title,
-                    content: content,
-                    source: result.link
-                });
-            }
+            // 并发抓取当前批次
+            const batchPromises = batch.map(async (result, index) => {
+                console.log(`正在抓取 [${i + index + 1}/${articlesToFetch}]: ${result.title}`);
+                const content = await fetchArticleContent(result.link, 2); // 最多重试2次
+                
+                if (content && content.length > 200) {
+                    return {
+                        title: result.title,
+                        content: content,
+                        source: result.link
+                    };
+                } else {
+                    console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
+                    return null;
+                }
+            });
             
-            // 避免请求过快
-            if (i < Math.min(3, searchResults.length) - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+            // 等待当前批次完成
+            const batchResults = await Promise.all(batchPromises);
+            
+            // 过滤掉失败的结果
+            batchResults.forEach(article => {
+                if (article) {
+                    articles.push(article);
+                }
+            });
+            
+            // 批次之间添加延迟，避免请求过快
+            if (i + maxConcurrent < articlesToFetch) {
+                await new Promise(resolve => setTimeout(resolve, 1500));
             }
         }
         
