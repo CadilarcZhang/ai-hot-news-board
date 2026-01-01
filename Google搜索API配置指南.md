@@ -66,6 +66,41 @@ Google Custom Search API的免费配额：
 2. 检查控制台日志，确认搜索是否成功
 3. 如果Google搜索失败，系统会自动回退到百度搜索
 
+## 解决403 Forbidden错误
+
+如果遇到 `403 Forbidden: Requests from referer <empty> are blocked` 错误，有以下解决方案：
+
+### 方案1：修改API密钥的HTTP referrer限制（推荐）
+
+1. 访问 [Google Cloud Console](https://console.cloud.google.com/)
+2. 进入 **"API和服务" > "凭据"**
+3. 点击你的API密钥进行编辑
+4. 在 **"应用限制"** 部分：
+   - 选择 **"HTTP引荐来源网址（网站）"**
+   - 添加以下网址（根据你的实际域名修改）：
+     - `https://news.zxt.net.cn/*`
+     - `https://*.vercel.app/*` （如果使用Vercel）
+     - `http://localhost:*` （本地开发）
+5. 保存更改
+
+### 方案2：使用IP地址限制（服务器端推荐）
+
+1. 在API密钥设置中，选择 **"IP地址（网络服务器、cron作业等）"**
+2. 添加你的服务器IP地址
+3. 注意：Vercel等Serverless平台的IP是动态的，此方案不适用
+
+### 方案3：不设置任何限制（不推荐，安全性较低）
+
+1. 在API密钥设置中，选择 **"无"**
+2. 这样任何来源都可以使用，但安全性较低
+3. 建议至少设置HTTP referrer限制
+
+### 方案4：代码中添加Referer头（已实现）
+
+代码中已经添加了Referer头，但需要确保：
+- 在Vercel环境变量中设置 `SITE_URL` 为你的域名
+- 或者代码会自动使用 `VERCEL_URL` 环境变量
+
 ## 常见问题
 
 ### Q: API密钥和OAuth客户端ID有什么区别？

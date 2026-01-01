@@ -559,11 +559,18 @@ async function searchNews(query) {
                 // 添加中文搜索参数，提高中文搜索结果质量
                 const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
                 
+                // 获取当前部署的域名，用于设置Referer
+                const referer = process.env.VERCEL_URL 
+                    ? `https://${process.env.VERCEL_URL}` 
+                    : (process.env.SITE_URL || 'https://news.zxt.net.cn');
+                
                 console.log('使用Google Custom Search API搜索:', query);
                 const googleResponse = await axios.get(googleUrl, { 
                     timeout: 15000,
                     headers: {
-                        'Accept': 'application/json'
+                        'Accept': 'application/json',
+                        'Referer': referer,
+                        'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
                     }
                 });
                 
