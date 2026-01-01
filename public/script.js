@@ -852,6 +852,34 @@ document.addEventListener('DOMContentLoaded', function() {
                     loadingElement.style.display = 'none';
                     aiContent.style.display = 'block';
                     
+                    // 处理文章链接信息
+                    if (data.type === 'sources' && data.articles && data.articles.length > 0) {
+                        // 在内容容器上方显示文章链接
+                        const sourcesContainer = newsContent.querySelector('.article-sources');
+                        if (!sourcesContainer) {
+                            // 创建链接容器
+                            const sourcesDiv = document.createElement('div');
+                            sourcesDiv.className = 'article-sources';
+                            sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
+                            // 插入到内容容器之前
+                            contentContainer.parentNode.insertBefore(sourcesDiv, contentContainer);
+                        }
+                        
+                        const linksContainer = newsContent.querySelector('.sources-links');
+                        if (linksContainer) {
+                            linksContainer.innerHTML = '';
+                            data.articles.forEach((article, index) => {
+                                const linkElement = document.createElement('a');
+                                linkElement.href = article.link;
+                                linkElement.target = '_blank';
+                                linkElement.rel = 'noopener noreferrer';
+                                linkElement.className = 'source-link';
+                                linkElement.textContent = `${index + 1}. ${article.title}`;
+                                linksContainer.appendChild(linkElement);
+                            });
+                        }
+                    }
+                    
                     if (data.content) {
                         fullContent += data.content;
                         contentContainer.innerHTML = formatContent(fullContent);
@@ -1059,20 +1087,70 @@ document.addEventListener('DOMContentLoaded', function() {
     function formatContent(content) {
         if (!content) return '';
         
-        // 分段落处理
-        const paragraphs = content.split('\n\n').filter(p => p.trim());
+        // 清理文本：移除Markdown标记和不规范字符
+        let cleanedContent = content
+            // 移除Markdown标题标记（#、##、###等，包括后面的空格）
+            .replace(/^#{1,6}\s*/gm, '')
+            // 移除Markdown粗体标记（**text** 保留text，处理嵌套情况）
+            .replace(/\*\*([^*]+(?:\*[^*]+)*)\*\*/g, '$1')
+            // 移除单个星号（*text* 保留text，但不影响粗体）
+            .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '$1')
+            // 移除Markdown列表标记（-、*、+、•）
+            .replace(/^[\s]*[-*+•]\s+/gm, '')
+            // 移除Markdown数字列表标记（1. 2. 等）
+            .replace(/^\d+[\.、]\s+/gm, '')
+            // 移除Markdown代码块标记
+            .replace(/```[\s\S]*?```/g, '')
+            .replace(/`([^`]+)`/g, '$1')
+            // 移除Markdown链接标记，保留文本
+            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+            // 移除Markdown图片标记
+            .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '')
+            // 清理多余的换行符（3个以上换行符变为2个）
+            .replace(/\n{3,}/g, '\n\n')
+            // 移除行首行尾的空白字符
+            // .replace(/^\s+|\s+$/gm, '')
+            // 清理行内的多个连续空格（保留单个空格）
+            .replace(/[ \t]{2,}/g, ' ')
+            // 移除行尾的多个空格
+            .replace(/[ \t]+$/gm, '')
+            .trim();
         
-        if (paragraphs.length === 0) return content;
+        // 分段落处理：按双换行符分割
+        let paragraphs = cleanedContent.split(/\n\s*\n/).filter(p => p.trim());
+        
+        // 如果没有双换行符，尝试按单换行符分割（但要过滤掉太短的行）
+        if (paragraphs.length <= 1) {
+            paragraphs = cleanedContent.split('\n')
+                .map(p => p.trim())
+                .filter(p => p.length > 0 && !p.match(/^[#*\-+•\s]+$/)); // 过滤掉只有标记的行
+        }
+        
+        if (paragraphs.length === 0) {
+            // 如果还是没有段落，直接返回清理后的内容
+            return `<p>${cleanedContent}</p>`;
+        }
         
         // 为第一段添加特殊样式
-        let formattedContent = `<p class="first-paragraph">${paragraphs[0]}</p>`;
+        let formattedContent = `<p class="first-paragraph">${escapeHtml(paragraphs[0])}</p>`;
         
         // 处理其余段落
         for (let i = 1; i < paragraphs.length; i++) {
-            formattedContent += `<p>${paragraphs[i]}</p>`;
+            const paragraph = escapeHtml(paragraphs[i]);
+            // 跳过空段落或只有空白字符的段落
+            if (paragraph.trim()) {
+                formattedContent += `<p>${paragraph}</p>`;
+            }
         }
         
         return formattedContent;
+    }
+    
+    // HTML转义函数，防止XSS攻击
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
     
     // 显示新闻内容 - 同时处理PC和移动端
@@ -1245,7 +1323,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 生成图片
         generateMobileImage(newsId, title, fullContent, heat, imageContainer);
-        
+
         
         // 关闭之前的EventSource连接（如果存在）
         if (eventSources[`mobile-${newsId}`]) {
@@ -1273,6 +1351,34 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     const data = JSON.parse(event.data);
                     loading.style.display = 'none';
+                    
+                    // 处理文章链接信息（移动端）
+                    if (data.type === 'sources' && data.articles && data.articles.length > 0) {
+                        // 在内容容器上方显示文章链接
+                        const sourcesContainer = mobileContent.querySelector('.article-sources');
+                        if (!sourcesContainer) {
+                            // 创建链接容器
+                            const sourcesDiv = document.createElement('div');
+                            sourcesDiv.className = 'article-sources';
+                            sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
+                            // 插入到文本内容之前
+                            textContent.parentNode.insertBefore(sourcesDiv, textContent);
+                        }
+                        
+                        const linksContainer = mobileContent.querySelector('.sources-links');
+                        if (linksContainer) {
+                            linksContainer.innerHTML = '';
+                            data.articles.forEach((article, index) => {
+                                const linkElement = document.createElement('a');
+                                linkElement.href = article.link;
+                                linkElement.target = '_blank';
+                                linkElement.rel = 'noopener noreferrer';
+                                linkElement.className = 'source-link';
+                                linkElement.textContent = `${index + 1}. ${article.title}`;
+                                linksContainer.appendChild(linkElement);
+                            });
+                        }
+                    }
                     
                     if (data.content) {
                         fullContent += data.content;

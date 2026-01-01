@@ -652,15 +652,18 @@ async function fetchArticleContent(url) {
         // 方法1: 查找常见的文章内容选择器
         const contentSelectors = [
             'article',
+            'section',
+            '.pages_content',
             '.article-content',
             '.content',
             '.post-content',
             '.entry-content',
-            '#content',
+            '#content', 
             '.main-content',
             '.news-content',
             '.article-body',
-            '.article-text'
+            '.article-text',    
+            'p'
         ];
         
         for (const selector of contentSelectors) {
@@ -703,7 +706,7 @@ async function fetchArticleContent(url) {
 /**
  * 从多个搜索结果中提取并合并内容
  * @param {string} query - 搜索关键词
- * @returns {Promise<string>} 返回合并后的文章内容
+ * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
 async function fetchMultipleArticles(query) {
     try {
@@ -711,7 +714,7 @@ async function fetchMultipleArticles(query) {
         const searchResults = await searchNews(query);
         
         if (searchResults.length === 0) {
-            return null;
+            return { content: null, articles: [] };
         }
         
         // 抓取前3个搜索结果的内容
@@ -737,9 +740,10 @@ async function fetchMultipleArticles(query) {
         }
         
         if (articles.length === 0) {
-            return null;
+            return { content: null, articles: [] };
         }
         console.log("articles: " + JSON.stringify(articles));
+        
         // 合并多篇文章内容
         let combinedContent = `根据搜索关键词"${query}"，我找到了以下相关新闻文章：\n\n`;
         
@@ -749,10 +753,18 @@ async function fetchMultipleArticles(query) {
             combinedContent += `${article.content}\n\n`;
             combinedContent += '---\n\n';
         });
-        return combinedContent;
+        
+        // 返回内容和文章信息
+        return {
+            content: combinedContent,
+            articles: articles.map(article => ({
+                title: article.title,
+                link: article.source
+            }))
+        };
     } catch (error) {
         console.error('获取多篇文章失败:', error);
-        return null;
+        return { content: null, articles: [] };
     }
 }
 
@@ -802,10 +814,21 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     
     // 检查缓存
     const cacheKey = `content-search-${title}`;
+    const cacheArticlesKey = `articles-search-${title}`;
     let cachedContent = simpleCache.get(cacheKey);
+    let cachedArticles = simpleCache.get(cacheArticlesKey);
     
     if (cachedContent) {
         console.log(`从缓存获取搜索生成内容: ${title}`);
+        
+        // 如果有缓存的文章链接，先发送
+        if (cachedArticles && cachedArticles.length > 0) {
+            safeWrite(`data: ${JSON.stringify({ 
+                type: 'sources',
+                articles: cachedArticles 
+            })}\n\n`);
+        }
+        
         // 分段发送缓存内容
         const chunks = cachedContent.split('\n');
         safeWrite(`data: ${JSON.stringify({ content: chunks[0] })}\n\n`);
@@ -842,13 +865,26 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         }
     }, 60000); // 60秒超时（搜索需要更长时间）
     
+    // 定义articlesData变量，以便在后续作用域中使用
+    let articlesData = { content: null, articles: [] };
+    
     try {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ content: "🔍 正在搜索相关新闻..." })}\n\n`);
         
         // 步骤2: 搜索并抓取文章内容
-        const articlesContent = await fetchMultipleArticles(title);
-        console.log("合并多篇文章内容: " + JSON.stringify(articlesContent));
+        articlesData = await fetchMultipleArticles(title);
+        console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
+        
+        // 发送文章链接信息（如果有）
+        if (articlesData.articles && articlesData.articles.length > 0) {
+            safeWrite(`data: ${JSON.stringify({ 
+                type: 'sources',
+                articles: articlesData.articles 
+            })}\n\n`);
+        }
+        
+        const articlesContent = articlesData.content;
         if (!articlesContent || articlesContent.length < 200) {
             clearTimeout(timeout);
             safeWrite(`data: ${JSON.stringify({ content: "\n\n⚠️ 未能找到足够的新闻内容，将使用AI生成解读。\n\n" })}\n\n`);
@@ -863,17 +899,17 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         // 步骤3: 使用AI对抓取的内容进行摘要
         const prompt = articlesContent 
             ? `请基于以下真实新闻文章内容，为热搜话题"${title}"生成一份准确、客观的新闻摘要。要求：
-1. 基于提供的真实新闻内容，不要编造信息
-2. 提取关键事实和数据
-3. 分析事件的影响和意义
-4. 语言生动有趣，包含适当的表情符号
-5. 至少3-4个段落，每个段落3-4句话
-6. 直接给出最终内容，不要有思考过程
+                1. 基于提供的真实新闻内容，不要编造信息
+                2. 提取关键事实和数据
+                3. 分析事件的影响和意义
+                4. 语言生动有趣，包含适当的表情符号
+                5. 至少3-4个段落，每个段落3-4句话
+                6. 直接给出最终内容，不要有思考过程
 
-真实新闻内容：
-${articlesContent}
+                真实新闻内容：
+                ${articlesContent}
 
-请生成摘要：`
+                请生成摘要：`
             : `请为热搜话题"${title}"生成一份新闻解读。由于未能获取到足够的真实新闻内容，请基于你的知识生成一份客观的分析。要求语言生动有趣，包含表情符号，至少3-4个段落。`;
         
         // 创建AI API请求
@@ -930,6 +966,10 @@ ${articlesContent}
                     if (data === '[DONE]') {
                         if (fullContent.trim().length > 0) {
                             simpleCache.set(cacheKey, fullContent, 86400);
+                            // 同时缓存文章链接信息
+                            if (articlesData.articles && articlesData.articles.length > 0) {
+                                simpleCache.set(cacheArticlesKey, articlesData.articles, 86400);
+                            }
                         }
                         safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                         safeEnd();
@@ -991,6 +1031,10 @@ ${articlesContent}
             if (!isResponseEnded) {
                 if (fullContent.trim().length > 0) {
                     simpleCache.set(cacheKey, fullContent, 86400);
+                    // 同时缓存文章链接信息
+                    if (articlesData.articles && articlesData.articles.length > 0) {
+                        simpleCache.set(cacheArticlesKey, articlesData.articles, 86400);
+                    }
                 }
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                 safeEnd();

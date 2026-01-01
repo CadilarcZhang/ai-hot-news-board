@@ -383,7 +383,11 @@ main {
 }
 
 .text-content p {
-    margin-bottom: 15px;
+    margin-bottom: 18px;
+    text-align: justify;
+    word-wrap: break-word;
+    word-break: break-word;
+    letter-spacing: 0.2px;
 }
 
 .text-content p:last-child {
@@ -394,6 +398,8 @@ main {
     font-weight: 600;
     color: #ff3852;
     font-size: 1.1rem;
+    margin-bottom: 20px;
+    line-height: 1.7;
 }
 
 .image-container {
@@ -502,6 +508,74 @@ footer {
     padding: 20px;
     color: #999;
     font-size: 0.9rem;
+}
+
+/* 文章来源链接样式 */
+.article-sources {
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: #f0f7ff;
+    border-left: 4px solid #4a90e2;
+    border-radius: 8px;
+}
+
+.sources-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #4a90e2;
+    margin-bottom: 10px;
+}
+
+.sources-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.source-link {
+    display: block;
+    color: #333;
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 8px 12px;
+    background-color: #fff;
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+    transition: all 0.3s ease;
+    word-break: break-all;
+}
+
+.source-link:hover {
+    background-color: #e8f4ff;
+    border-color: #4a90e2;
+    color: #4a90e2;
+    transform: translateX(5px);
+}
+
+.source-link:active {
+    transform: translateX(3px);
+}
+
+/* 深色模式下的来源链接样式 */
+body.dark-mode .article-sources {
+    background-color: #1a2332;
+    border-left-color: #5a9de2;
+}
+
+body.dark-mode .sources-label {
+    color: #5a9de2;
+}
+
+body.dark-mode .source-link {
+    background-color: #2a2a2a;
+    border-color: #444;
+    color: #e0e0e0;
+}
+
+body.dark-mode .source-link:hover {
+    background-color: #2a3a4a;
+    border-color: #5a9de2;
+    color: #5a9de2;
 }
 
 /* AI生成内容样式增强 */
@@ -1183,14 +1257,38 @@ body:not(.dark-mode) .image-loading::after {
     }
     
     .mobile-text-content {
-        font-size: 15px;
-        line-height: 1.6;
+        font-size: 16px;
+        line-height: 1.8;
         color: #333;
+        padding: 20px 15px;
+        background-color: #fafafa;
+        border-radius: 12px;
+        margin: 15px 0;
+    }
+    
+    .mobile-text-content p {
+        margin-bottom: 18px;
+        text-align: justify;
+        word-wrap: break-word;
+        word-break: break-word;
+    }
+    
+    .mobile-text-content p:last-child {
+        margin-bottom: 0;
     }
     
     .mobile-text-content .first-paragraph {
-        font-weight: bold;
-        font-size: 16px;
+        font-weight: 600;
+        font-size: 17px;
+        color: #ff3852;
+        margin-bottom: 20px;
+        line-height: 1.7;
+    }
+    
+    /* 改善段落间距和可读性 */
+    .mobile-text-content p:not(.first-paragraph) {
+        text-indent: 0;
+        letter-spacing: 0.3px;
     }
     
     .mobile-image-container {
@@ -1219,6 +1317,15 @@ body:not(.dark-mode) .image-loading::after {
     }
     
     body.dark-mode .mobile-text-content {
+        color: #ddd;
+        background-color: #2a2a2a;
+    }
+    
+    body.dark-mode .mobile-text-content .first-paragraph {
+        color: #ff6b85;
+    }
+    
+    body.dark-mode .mobile-text-content p {
         color: #ddd;
     }
     
