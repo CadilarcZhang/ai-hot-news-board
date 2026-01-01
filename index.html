@@ -93,5 +93,73 @@
 
 <!-- 添加脚本 -->
 <script src="script.js"></script>
+
+<!-- 添加内联脚本确保分享按钮功能正常 -->
+<script>
+    // 确保DOM加载完成后执行
+    document.addEventListener('DOMContentLoaded', function() {
+        // 复制链接按钮
+        document.getElementById('copy-link-btn').addEventListener('click', function() {
+            const url = window.location.href;
+            navigator.clipboard.writeText(url)
+                .then(() => {
+                    showToastMessage('链接已复制到剪贴板');
+                })
+                .catch(err => {
+                    console.error('复制失败:', err);
+                    fallbackCopy(url);
+                });
+        });
+        
+        // 分享到微博按钮
+        document.getElementById('share-weibo-btn').addEventListener('click', function() {
+            const url = encodeURIComponent(window.location.href);
+            const title = encodeURIComponent(document.title);
+            const weiboUrl = `https://service.weibo.com/share/share.php?url=${url}&title=${title}`;
+            window.open(weiboUrl, '_blank');
+        });
+        
+        // 分享到微信按钮
+        document.getElementById('share-wechat-btn').addEventListener('click', function() {
+            showToastMessage('请使用微信扫一扫，扫描当前页面分享');
+        });
+        
+        // 显示提示消息
+        function showToastMessage(message) {
+            const oldToast = document.querySelector('.toast-message');
+            if (oldToast) oldToast.remove();
+            
+            const toast = document.createElement('div');
+            toast.className = 'toast-message';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+        
+        // 备用复制方法
+        function fallbackCopy(text) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-9999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            
+            try {
+                document.execCommand('copy');
+                showToastMessage('链接已复制到剪贴板');
+            } catch (err) {
+                showToastMessage('复制失败，请手动复制');
+            }
+            
+            document.body.removeChild(textArea);
+        }
+    });
+</script>
 </body>
 </html> 

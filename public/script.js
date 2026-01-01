@@ -36,6 +36,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initThemeToggle();
     
     // 添加分享功能（只初始化一次，使用事件委托）
+    let shareButtonsInitialized = false;
     initShareButtons();
     
     // 更新网站标题
@@ -102,7 +103,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 初始化分享按钮功能（使用事件委托，只设置一次）
-    let shareButtonsInitialized = false;
+    // let shareButtonsInitialized = false;
     function initShareButtons() {
         // 防止重复初始化
         if (shareButtonsInitialized) {
