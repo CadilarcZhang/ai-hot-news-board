@@ -357,7 +357,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "deepseek-ai/DeepSeek-V3",
+                "model": "deepseek-ai/DeepSeek-V3.2-Exp",
                 "messages": [
                     {
                         "role": "system",
@@ -500,7 +500,7 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "Kwai-Kolors/Kolors",
+                "model": "Qwen/Qwen-Image",
                 "prompt": prompt,
                 "negative_prompt": "低质量，模糊，变形，文字，水印",
                 "image_size": "1024x1024",
@@ -678,7 +678,7 @@ app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
                         'Content-Type': 'application/json'
                     },
                     data: {
-                        "model": "deepseek-ai/DeepSeek-V3",
+                        "model": "deepseek-ai/DeepSeek-V3.2-Exp",
                         "messages": [
                             {
                                 "role": "system",
