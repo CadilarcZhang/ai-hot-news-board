@@ -543,7 +543,7 @@ async function searchNews(query) {
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_ENGINE_ID || false;
+        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
         
         // 调试日志（仅在开发环境）
         if (process.env.NODE_ENV !== 'production') {
