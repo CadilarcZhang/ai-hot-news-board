@@ -254,10 +254,13 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
     }
     
     // 设置SSE响应头
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no'); // 禁用Nginx缓冲
+    res.setHeader('Transfer-Encoding', 'chunked'); // 确保使用分块传输
+    // Vercel 特定优化
+    res.setHeader('X-Vercel-Cache-Control', 'no-cache');
     
     // 检查缓存中是否有该标题的内容
     const cacheKey = `content-${title}`;
@@ -282,7 +285,9 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
     const safeWrite = (data) => {
         if (!isResponseEnded && !res.writableEnded && res.writable) {
             try {
-                res.write(data);
+                // 确保数据是字符串格式，使用UTF-8编码
+                const dataStr = typeof data === 'string' ? data : String(data);
+                res.write(dataStr, 'utf8');
             } catch (error) {
                 console.error('写入响应时出错:', error);
                 isResponseEnded = true;
@@ -345,7 +350,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
             safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
             safeEnd();
         }
-    }, 15000); // 15秒超时
+    }, 30000); // 增加到30秒超时，适应Vercel环境
     
     try {
         // 创建AI API请求
@@ -377,25 +382,39 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                 }
             },
             responseType: 'stream',
-            timeout: 10000 // 10秒超时
+            timeout: 30000 // 增加到30秒超时，适应Vercel环境
         });
         
         // 清除超时计时器
         clearTimeout(timeout);
         
         let fullContent = '';
+        let buffer = ''; // 添加缓冲区来处理跨chunk的数据
         
         // 处理流式响应
         response.data.on('data', (chunk) => {
             if (isResponseEnded) return;
             
-            const lines = chunk.toString().split('\n');
+            // 将新数据添加到缓冲区
+            buffer += chunk.toString();
+            
+            // 按行分割，但保留最后一行（可能不完整）
+            const lines = buffer.split('\n');
+            // 保留最后一行在缓冲区中（如果它不以换行符结尾）
+            buffer = lines.pop() || '';
+            
+            // 处理完整的行
             for (const line of lines) {
-                if (line.trim() === '' || isResponseEnded) continue;
+                if (isResponseEnded) break;
                 
+                // 跳过空行
+                if (line.trim() === '') continue;
+                
+                // 处理SSE数据行
                 if (line.startsWith('data: ')) {
-                    const data = line.substring(6);
+                    const data = line.substring(6).trim();
                     
+                    // 检查是否是结束标记
                     if (data === '[DONE]') {
                         // 缓存生成的完整内容，增加缓存时间到24小时
                         if (fullContent.trim().length > 0) {
@@ -407,6 +426,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                         return;
                     }
                     
+                    // 尝试解析JSON数据
                     try {
                         const parsed = JSON.parse(data);
                         if (parsed.choices && 
@@ -415,19 +435,63 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                             parsed.choices[0].delta.content) {
                             
                             const content = parsed.choices[0].delta.content;
-                            fullContent += content;
-                            safeWrite(`data: ${JSON.stringify({ content })}\n\n`);
+                            if (content) {
+                                fullContent += content;
+                                safeWrite(`data: ${JSON.stringify({ content })}\n\n`);
+                            }
                         }
                     } catch (e) {
-                        console.error('解析JSON出错:', e);
+                        // 如果JSON解析失败，可能是数据不完整，记录但不中断
+                        console.error('解析JSON出错:', e, '数据:', data.substring(0, 100));
+                        // 不中断流，继续处理下一行
                     }
                 }
             }
         });
         
         response.data.on('end', () => {
+            // 处理缓冲区中剩余的数据
+            if (buffer.trim() && !isResponseEnded) {
+                const lines = buffer.split('\n');
+                for (const line of lines) {
+                    if (line.trim() === '' || isResponseEnded) continue;
+                    
+                    if (line.startsWith('data: ')) {
+                        const data = line.substring(6).trim();
+                        
+                        if (data === '[DONE]') {
+                            if (fullContent.trim().length > 0) {
+                                simpleCache.set(cacheKey, fullContent, 86400);
+                            }
+                            break;
+                        }
+                        
+                        try {
+                            const parsed = JSON.parse(data);
+                            if (parsed.choices && 
+                                parsed.choices[0] && 
+                                parsed.choices[0].delta && 
+                                parsed.choices[0].delta.content) {
+                                
+                                const content = parsed.choices[0].delta.content;
+                                if (content) {
+                                    fullContent += content;
+                                    safeWrite(`data: ${JSON.stringify({ content })}\n\n`);
+                                }
+                            }
+                        } catch (e) {
+                            console.error('处理缓冲区数据时出错:', e);
+                        }
+                    }
+                }
+            }
+            
             // 如果没有正常完成，发送完成信号
             if (!isResponseEnded) {
+                // 缓存生成的完整内容
+                if (fullContent.trim().length > 0) {
+                    simpleCache.set(cacheKey, fullContent, 86400);
+                }
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                 safeEnd();
             }
