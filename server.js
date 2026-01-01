@@ -543,6 +543,7 @@ async function searchNews(query) {
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
+        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_ENGINE_ID || false;
         
         // 调试日志（仅在开发环境）
         if (process.env.NODE_ENV !== 'production') {
@@ -554,7 +555,7 @@ async function searchNews(query) {
             });
         }
         
-        if (GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
+        if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
             try {
                 // 添加中文搜索参数，提高中文搜索结果质量
                 const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
