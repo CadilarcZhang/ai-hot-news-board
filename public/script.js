@@ -1,3 +1,79 @@
+// 动态加载 QRCode 库
+let qrcodeLoading = false;
+let qrcodeLoaded = false;
+
+function loadQRCodeLibrary() {
+    return new Promise((resolve, reject) => {
+        // 如果已经加载，直接返回
+        if (typeof QRCode !== 'undefined') {
+            qrcodeLoaded = true;
+            resolve();
+            return;
+        }
+        
+        // 如果正在加载，等待加载完成
+        if (qrcodeLoading) {
+            const checkInterval = setInterval(() => {
+                if (typeof QRCode !== 'undefined') {
+                    clearInterval(checkInterval);
+                    qrcodeLoaded = true;
+                    resolve();
+                } else if (!qrcodeLoading) {
+                    clearInterval(checkInterval);
+                    reject(new Error('QRCode 库加载失败'));
+                }
+            }, 100);
+            return;
+        }
+        
+        // CDN 列表（按优先级排序）
+        const cdns = [
+            'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js',
+            'https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js'
+        ];
+        
+        let currentIndex = 0;
+        qrcodeLoading = true;
+        
+        function tryLoadCDN(index) {
+            if (index >= cdns.length) {
+                qrcodeLoading = false;
+                reject(new Error('所有 CDN 都加载失败'));
+                return;
+            }
+            
+            const script = document.createElement('script');
+            script.src = cdns[index];
+            script.async = true;
+            
+            script.onload = () => {
+                if (typeof QRCode !== 'undefined') {
+                    qrcodeLoading = false;
+                    qrcodeLoaded = true;
+                    resolve();
+                } else {
+                    // 当前 CDN 加载失败，尝试下一个
+                    document.head.removeChild(script);
+                    tryLoadCDN(index + 1);
+                }
+            };
+            
+            script.onerror = () => {
+                // 当前 CDN 加载失败，尝试下一个
+                if (script.parentNode) {
+                    document.head.removeChild(script);
+                }
+                tryLoadCDN(index + 1);
+            };
+            
+            document.head.appendChild(script);
+        }
+        
+        tryLoadCDN(0);
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // 获取当前日期，用于作者发布时间
     const now = new Date();
@@ -110,28 +186,29 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // 使用事件委托，在 share-container 上监听所有点击事件
-        const shareContainer = document.querySelector('.share-container');
-        if (!shareContainer) {
+        // 使用事件委托，在 content-area 上监听所有点击事件
+        // 这样无论何时动态生成内容，分享按钮都能工作
+        const contentArea = document.getElementById('content-area');
+        if (!contentArea) {
             // 如果容器还没加载，稍后重试（最多重试3次）
             let retryCount = 0;
             const maxRetries = 3;
             const retryInterval = setInterval(() => {
                 retryCount++;
-                const container = document.querySelector('.share-container');
+                const container = document.getElementById('content-area');
                 if (container) {
                     clearInterval(retryInterval);
                     setupShareButtonListeners(container);
                     shareButtonsInitialized = true;
                 } else if (retryCount >= maxRetries) {
                     clearInterval(retryInterval);
-                    console.warn('分享容器未找到，分享功能可能不可用');
+                    console.warn('内容区域未找到，分享功能可能不可用');
                 }
             }, 100);
             return;
         }
         
-        setupShareButtonListeners(shareContainer);
+        setupShareButtonListeners(contentArea);
         shareButtonsInitialized = true;
     }
     
@@ -139,6 +216,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function setupShareButtonListeners(container) {
         // 只在容器上添加一次事件监听器
         container.addEventListener('click', function(e) {
+            // 查找点击的元素是否是分享按钮或其子元素
             const target = e.target.closest('.share-btn');
             if (!target) return;
             
@@ -161,8 +239,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 const weiboUrl = `https://service.weibo.com/share/share.php?url=${url}&title=${title}`;
                 window.open(weiboUrl, '_blank');
             } else if (target.classList.contains('share-wechat') || target.id === 'share-wechat-btn') {
-                // 分享到微信
-                showToast('请使用微信扫一扫，扫描当前页面分享');
+                // 分享到微信 - 显示二维码
+                showWechatQRCode();
             }
         });
     }
@@ -196,6 +274,126 @@ document.addEventListener('DOMContentLoaded', function() {
                 toast.remove();
             }, 300);
         }, 3000);
+    }
+    
+    // 显示微信二维码
+    function showWechatQRCode() {
+        const url = window.location.href;
+        
+        // 移除已存在的二维码弹窗
+        const existingQR = document.getElementById('wechat-qr-modal');
+        if (existingQR) {
+            existingQR.remove();
+        }
+        
+        // 创建二维码弹窗
+        const modal = document.createElement('div');
+        modal.id = 'wechat-qr-modal';
+        modal.className = 'wechat-qr-modal';
+        
+        // 使用在线 API 生成二维码图片
+        // 使用多个备用 API，按优先级排序
+        const qrApiUrls = [
+            `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`,
+            `https://chart.googleapis.com/chart?cht=qr&chs=200x200&chl=${encodeURIComponent(url)}`,
+            `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=2&data=${encodeURIComponent(url)}`
+        ];
+        
+        modal.innerHTML = `
+            <div class="wechat-qr-content">
+                <div class="wechat-qr-header">
+                    <h3>微信扫码分享</h3>
+                    <button class="wechat-qr-close" aria-label="关闭">&times;</button>
+                </div>
+                <div class="wechat-qr-body">
+                    <div class="wechat-qr-loading">正在生成二维码...</div>
+                    <img id="wechat-qr-image" class="wechat-qr-image" style="display: none;" alt="二维码" />
+                    <p class="wechat-qr-tip" style="display: none;">使用微信扫一扫，扫描二维码访问</p>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // 显示弹窗
+        setTimeout(() => {
+            modal.classList.add('show');
+        }, 10);
+        
+        // 尝试加载二维码图片（使用备用 API）
+        const qrImage = modal.querySelector('#wechat-qr-image');
+        const loadingDiv = modal.querySelector('.wechat-qr-loading');
+        const tipP = modal.querySelector('.wechat-qr-tip');
+        
+        let currentApiIndex = 0;
+        
+        function tryLoadQRImage(index) {
+            if (index >= qrApiUrls.length) {
+                // 所有 API 都失败
+                if (loadingDiv) loadingDiv.textContent = '二维码生成失败，请稍后重试';
+                setTimeout(() => {
+                    modal.remove();
+                }, 2000);
+                return;
+            }
+            
+            const img = new Image();
+            let timeout;
+            
+            img.onload = () => {
+                clearTimeout(timeout);
+                // 成功加载，显示二维码
+                if (loadingDiv) loadingDiv.style.display = 'none';
+                qrImage.src = img.src;
+                qrImage.style.display = 'block';
+                if (tipP) tipP.style.display = 'block';
+            };
+            
+            img.onerror = () => {
+                clearTimeout(timeout);
+                // 当前 API 失败，尝试下一个
+                tryLoadQRImage(index + 1);
+            };
+            
+            // 设置超时，避免长时间等待
+            timeout = setTimeout(() => {
+                img.onerror();
+            }, 5000);
+            
+            img.src = qrApiUrls[index];
+        }
+        
+        tryLoadQRImage(0);
+        
+        // 关闭按钮事件
+        const closeBtn = modal.querySelector('.wechat-qr-close');
+        closeBtn.addEventListener('click', () => {
+            closeQRModal(modal);
+        });
+        
+        // 点击背景关闭
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeQRModal(modal);
+            }
+        });
+        
+        // ESC 键关闭
+        const handleEsc = (e) => {
+            if (e.key === 'Escape') {
+                closeQRModal(modal);
+                document.removeEventListener('keydown', handleEsc);
+            }
+        };
+        document.addEventListener('keydown', handleEsc);
+    }
+    
+    // 关闭二维码弹窗
+    function closeQRModal(modal) {
+        modal.classList.remove('show');
+        setTimeout(() => {
+            modal.remove();
+        }, 300);
     }
     
     // 备用复制方法
