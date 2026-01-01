@@ -912,6 +912,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             });
                         }
                     }
+
+                    if (data.message) {
+                        contentContainer.innerHTML += formatContent(data.message);
+                    }
                     
                     if (data.content) {
                         fullContent += data.content;
