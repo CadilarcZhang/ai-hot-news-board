@@ -1,3 +1,6 @@
+// 加载环境变量（必须在其他模块之前）
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -536,24 +539,58 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
 async function searchNews(query) {
     try {
         // 方法1: 使用Google Custom Search API（如果配置了）
-        const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
-        const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID;
+        // 从环境变量或config文件读取
+        const config = require('./config/index.js');
+        const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
+        const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
+        
+        // 调试日志（仅在开发环境）
+        if (process.env.NODE_ENV !== 'production') {
+            console.log('Google API配置检查:', {
+                hasApiKey: !!GOOGLE_API_KEY,
+                hasEngineId: !!GOOGLE_SEARCH_ENGINE_ID,
+                apiKeyPrefix: GOOGLE_API_KEY ? GOOGLE_API_KEY.substring(0, 10) + '...' : 'none',
+                engineId: GOOGLE_SEARCH_ENGINE_ID || 'none'
+            });
+        }
         
         if (GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
             try {
-                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5`;
-                const googleResponse = await axios.get(googleUrl, { timeout: 10000 });
+                // 添加中文搜索参数，提高中文搜索结果质量
+                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
                 
-                if (googleResponse.data.items && googleResponse.data.items.length > 0) {
+                console.log('使用Google Custom Search API搜索:', query);
+                const googleResponse = await axios.get(googleUrl, { 
+                    timeout: 15000,
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
+                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果`);
                     return googleResponse.data.items.map(item => ({
                         title: item.title,
                         link: item.link,
-                        snippet: item.snippet || ''
+                        snippet: item.snippet || item.htmlSnippet || ''
                     }));
+                } else {
+                    console.log('Google搜索返回空结果');
                 }
             } catch (googleError) {
-                console.error('Google搜索失败，尝试备用方法:', googleError.message);
+                // 详细记录错误信息，便于调试
+                if (googleError.response) {
+                    console.error('Google搜索API错误:', {
+                        status: googleError.response.status,
+                        statusText: googleError.response.statusText,
+                        data: googleError.response.data
+                    });
+                } else {
+                    console.error('Google搜索失败，尝试备用方法:', googleError.message);
+                }
             }
+        } else {
+            console.log('Google Custom Search API未配置，使用备用搜索方法');
         }
         
         // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
