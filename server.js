@@ -204,7 +204,7 @@ const AI_API_KEY = process.env.AI_API_KEY || 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvv
 // 获取热搜数据的接口
 app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
     try {
-        const platform = req.query.platform || 'weibo';
+        const platform = req.query.platform || 'networkhot';
         
         // 尝试从缓存获取热搜数据
         const cacheKey = `hot-news-${platform}`;
@@ -228,13 +228,13 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
                 endpoint = 'douyinhot';
                 break;
             default:
-                endpoint = 'weibohot';
+                endpoint = 'networkhot';
         }
         
         const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
         
         const response = await axios.get(apiUrl);
-        
+        // console.log(JSON.stringify(response.data));
         // 缓存结果，设置15分钟过期（增加缓存时间）
         simpleCache.set(cacheKey, response.data, 900);
         

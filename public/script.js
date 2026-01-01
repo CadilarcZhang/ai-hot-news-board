@@ -90,7 +90,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const SERVER_URL = BASE_PATH;
     
     // 从URL路径中提取平台信息
-    let currentPlatform = 'weibo'; // 默认平台
+    let currentPlatform = 'networkhot'; // 默认平台
     const pathParts = window.location.pathname.split('/');
     if (pathParts.length > 0) {
         const lastPart = pathParts[pathParts.length - 1];
@@ -463,7 +463,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.head.appendChild(toastStyle);
     
     // 获取热搜数据
-    function fetchHotNews(platform = 'weibo') {
+    function fetchHotNews(platform = 'networkhot') {
         // 更新当前平台
         currentPlatform = platform;
         
@@ -585,7 +585,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (index >= 15) return; // 只显示前15条
             
             const title = news.word || news.title || news.hotword || news.name;
-            const heat = news.hotindex || news.hotValue || news.score || (Math.floor(Math.random() * 3000) + 1000) + '万';
+            const heat = news.hotnum || news.hotindex || news.hotValue || news.score || (Math.floor(Math.random() * 3000) + 1000) + '万';
             
             // 创建列表项
             const li = document.createElement('li');
