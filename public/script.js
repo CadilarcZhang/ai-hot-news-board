@@ -79,10 +79,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const now = new Date();
     const dateStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
     
-    // 更新所有发布时间显示
+    // 更新所有发布时间显示为当前日期
     const publishTimeElements = document.querySelectorAll('.author-meta p');
     publishTimeElements.forEach(el => {
-        el.textContent = `刚刚发布 · ${dateStr}`;
+        el.textContent = dateStr; // 只显示日期，格式：yyyy-MM-dd
     });
     
     // 获取基础路径和当前设备类型
@@ -957,7 +957,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 const cacheData = {
                                     content: fullContent,
                                     articles: cachedArticles, // 保存参考来源信息
-                                    expiry: Date.now() + (10 * 60 * 1000) // 24小时过期
+                                    expiry: Date.now() + (10 * 60 * 1000) // 10分钟过期
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                                 console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
@@ -1074,7 +1074,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     const cacheData = {
                         url: data.image,
-                        expiry: Date.now() + (60 * 60 * 1000) // 7天过期
+                        expiry: Date.now() + (60 * 60 * 1000) // 1小时过期
                     };
                     localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                     console.log(`图片已保存到本地缓存: ${title}`);
@@ -1225,7 +1225,6 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('无效的新闻数据:', news);
             return;
         }
-        
         if (isMobile) {
             // 移动端逻辑
             const listItem = document.querySelector(`.hot-item[data-id="${news.id}"]`);
@@ -1273,6 +1272,19 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // 显示当前内容区域
             newsContent.style.display = 'block';
+            
+            // 更新文章标题（在当前newsContent内查找，确保准确）
+            const articleTitle = newsContent.querySelector('#article-title');
+            if (articleTitle) {
+                articleTitle.textContent = news.title + '-热搜解读';
+            }
+            // 更新发布日期为当前日期（yyyy-MM-dd格式）
+            const publishTime = newsContent.querySelector('.author-meta p');
+            if (publishTime) {
+                const now = new Date();
+                const dateStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
+                publishTime.textContent = dateStr;
+            }
             
             // 检查是否已经生成过内容
             const textContent = newsContent.querySelector('.text-content');
@@ -1491,7 +1503,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 const cacheData = {
                                     content: fullContent,
                                     articles: cachedArticles, // 保存参考来源信息
-                                    expiry: Date.now() + (10 * 60 * 1000) // 24小时过期
+                                    expiry: Date.now() + (10 * 60 * 1000) // 10分钟过期
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                                 console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
@@ -1603,7 +1615,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     const cacheData = {
                         url: data.image,
-                        expiry: Date.now() + (60 * 60 * 1000) // 24小时过期
+                        expiry: Date.now() + (60 * 60 * 1000) // 1小时过期
                     };
                     localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                     console.log(`图片已保存到本地缓存: ${title}`);
