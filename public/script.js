@@ -1276,7 +1276,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // 更新文章标题（在当前newsContent内查找，确保准确）
             const articleTitle = newsContent.querySelector('#article-title');
             if (articleTitle) {
-                articleTitle.textContent = news.title + '-热搜解读';
+                articleTitle.textContent = `《${news.title}》热搜解读`;
             }
             // 更新发布日期为当前日期（yyyy-MM-dd格式）
             const publishTime = newsContent.querySelector('.author-meta p');
