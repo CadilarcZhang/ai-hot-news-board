@@ -278,7 +278,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
             console.log(`使用相似提示词缓存: "${title}" => "${similarMatch.key.replace('content-', '')}"`);
             
             // 同时为当前标题创建缓存，避免下次再查找
-            simpleCache.set(cacheKey, cachedContent, 86400); // 缓存24小时
+            simpleCache.set(cacheKey, cachedContent, 3600); // 缓存10分钟
         }
     }
     
@@ -422,7 +422,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                     if (data === '[DONE]') {
                         // 缓存生成的完整内容，增加缓存时间到24小时
                         if (fullContent.trim().length > 0) {
-                            simpleCache.set(cacheKey, fullContent, 86400); // 缓存24小时
+                            simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
                         }
                         
                         safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -465,7 +465,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                         
                         if (data === '[DONE]') {
                             if (fullContent.trim().length > 0) {
-                                simpleCache.set(cacheKey, fullContent, 86400);
+                                simpleCache.set(cacheKey, fullContent, 3600);
                             }
                             break;
                         }
@@ -494,7 +494,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
             if (!isResponseEnded) {
                 // 缓存生成的完整内容
                 if (fullContent.trim().length > 0) {
-                    simpleCache.set(cacheKey, fullContent, 86400);
+                    simpleCache.set(cacheKey, fullContent, 3600);
                 }
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                 safeEnd();
@@ -1280,10 +1280,10 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                     
                     if (data === '[DONE]') {
                         if (fullContent.trim().length > 0) {
-                            simpleCache.set(cacheKey, fullContent, 86400);
+                            simpleCache.set(cacheKey, fullContent, 3600);
                             // 同时缓存文章链接信息
                             if (articlesData.articles && articlesData.articles.length > 0) {
-                                simpleCache.set(cacheArticlesKey, articlesData.articles, 86400);
+                                simpleCache.set(cacheArticlesKey, articlesData.articles, 3600);
                             }
                         }
                         safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -1320,7 +1320,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                         const data = line.substring(6).trim();
                         if (data === '[DONE]') {
                             if (fullContent.trim().length > 0) {
-                                simpleCache.set(cacheKey, fullContent, 86400);
+                                simpleCache.set(cacheKey, fullContent, 3600);
                             }
                             break;
                         }
@@ -1345,10 +1345,10 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             
             if (!isResponseEnded) {
                 if (fullContent.trim().length > 0) {
-                    simpleCache.set(cacheKey, fullContent, 86400);
+                    simpleCache.set(cacheKey, fullContent, 3600);
                     // 同时缓存文章链接信息
                     if (articlesData.articles && articlesData.articles.length > 0) {
-                        simpleCache.set(cacheArticlesKey, articlesData.articles, 86400);
+                        simpleCache.set(cacheArticlesKey, articlesData.articles, 3600);
                     }
                 }
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -1398,7 +1398,7 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
                 console.log(`使用相似图片缓存: "${title}" => "${similarMatch.key.replace('image-', '')}"`);
                 
                 // 同时为当前标题创建缓存，避免下次再查找
-                simpleCache.set(cacheKey, cachedImage, 3600 * 24); // 缓存24小时
+                simpleCache.set(cacheKey, cachedImage, 3600); // 缓存60分钟
                 
                 return res.json({ image: cachedImage });
             }
@@ -1432,7 +1432,7 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
         const imageUrl = response.data.data[0].url;
         
         // 缓存图片URL
-        simpleCache.set(cacheKey, imageUrl, 3600 * 24); // 缓存24小时
+        simpleCache.set(cacheKey, imageUrl, 3600); // 缓存24小时
         
         res.json({ image: imageUrl });
     } catch (error) {
@@ -1617,7 +1617,7 @@ app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
                 // 缓存生成的内容
                 if (response.data && response.data.choices && response.data.choices[0].message.content) {
                     const content = response.data.choices[0].message.content;
-                    simpleCache.set(cacheKey, content, 86400); // 缓存24小时
+                    simpleCache.set(cacheKey, content, 3600); // 缓存24小时
                     console.log(`缓存预热成功: ${title}`);
                 }
                 

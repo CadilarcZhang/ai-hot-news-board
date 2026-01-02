@@ -111,6 +111,51 @@ document.addEventListener('DOMContentLoaded', function() {
     // 主题切换功能
     initThemeToggle();
     
+    // 为移动端toggle按钮添加事件委托（在列表容器上，确保始终有效）
+    const hotNewsListContainer = document.getElementById('hot-news-list');
+    if (hotNewsListContainer && isMobile) {
+        hotNewsListContainer.addEventListener('click', function(e) {
+            // 检查是否点击了toggle按钮
+            const toggleBtn = e.target.closest('.toggle-btn');
+            if (toggleBtn) {
+                e.stopPropagation(); // 阻止事件冒泡
+                
+                // 找到对应的列表项
+                const listItem = toggleBtn.closest('.hot-item');
+                if (listItem) {
+                    // 切换展开状态
+                    const isExpanded = listItem.classList.contains('expanded');
+                    
+                    if (isExpanded) {
+                        // 收起：移除expanded类
+                        listItem.classList.remove('expanded');
+                        console.log('收起新闻内容:', listItem.dataset.id);
+                    } else {
+                        // 展开：添加expanded类
+                        listItem.classList.add('expanded');
+                        
+                        // 如果展开了，确保内容已生成
+                        const existingContent = listItem.nextElementSibling;
+                        if (!existingContent || !existingContent.classList.contains('mobile-content')) {
+                            // 获取新闻信息
+                            const newsId = parseInt(listItem.dataset.id);
+                            const title = listItem.querySelector('.hot-title')?.textContent || '';
+                            const heat = listItem.querySelector('.hot-heat')?.textContent || '';
+                            
+                            if (newsId && title) {
+                                console.log('展开并创建移动端内容:', newsId, title);
+                                // 创建移动端内容
+                                createMobileContent(newsId, title, heat, listItem);
+                            }
+                        } else {
+                            console.log('内容已存在，直接展开');
+                        }
+                    }
+                }
+            }
+        });
+    }
+    
     // 添加分享功能（只初始化一次，使用事件委托）
     let shareButtonsInitialized = false;
     initShareButtons();
@@ -643,26 +688,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
             
-            // 为移动端添加展开/收起按钮点击事件
-            if (isMobile) {
-                const toggleButton = li.querySelector('.toggle-btn');
-                toggleButton.addEventListener('click', function(e) {
-                    e.stopPropagation(); // 阻止事件冒泡
-                    
-                    // 切换当前项的展开状态
-                    li.classList.toggle('expanded');
-                    
-                    // 如果展开了，确保内容已生成
-                    if (li.classList.contains('expanded')) {
-                        // 检查是否已有对应的移动端内容
-                        const existingContent = li.nextElementSibling;
-                        if (!existingContent || !existingContent.classList.contains('mobile-content')) {
-                            // 创建移动端内容
-                            createMobileContent(index + 1, title, heat, li);
-                        }
-                    }
-                });
-            }
+            // 注意：移动端toggle按钮的事件处理已通过事件委托在hotNewsList上统一处理
+            // 这样可以确保即使列表重新渲染，事件监听器仍然有效
             
             hotNewsList.appendChild(li);
         });
@@ -925,11 +952,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (data.done) {
                         // 保存到本地缓存（包括参考来源信息）
                         if (fullContent.trim().length > 0) {
+                            // generateImageForContent(newsId, title, fullContent, heat);
                             try {
                                 const cacheData = {
                                     content: fullContent,
                                     articles: cachedArticles, // 保存参考来源信息
-                                    expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
+                                    expiry: Date.now() + (10 * 60 * 1000) // 24小时过期
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                                 console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
@@ -1018,7 +1046,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         // 构建提示词，使其更具体和相关
-        // const prompt = `新闻图片，主题：${title}，内容：${contentSummary}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
+        // const prompt = `新闻图片，主题：${title}，内容：${content}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
         const prompt = `新闻图片，主题：${title}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
         
         // 显示加载状态
@@ -1046,7 +1074,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     const cacheData = {
                         url: data.image,
-                        expiry: Date.now() + (24 * 60 * 60 * 1000) // 7天过期
+                        expiry: Date.now() + (60 * 60 * 1000) // 7天过期
                     };
                     localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                     console.log(`图片已保存到本地缓存: ${title}`);
@@ -1279,10 +1307,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         mobileContent.innerHTML = `
             <div class="mobile-content-inner">
-                <div class="mobile-header">
-                    <h3 class="mobile-title">${title}</h3>
-                    <span class="mobile-heat">${heat}</span>
-                </div>
+        
                 <div class="mobile-body">
                     <div class="mobile-loading">
                         <div class="loading-spinner"></div>
@@ -1466,7 +1491,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 const cacheData = {
                                     content: fullContent,
                                     articles: cachedArticles, // 保存参考来源信息
-                                    expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
+                                    expiry: Date.now() + (10 * 60 * 1000) // 24小时过期
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                                 console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
@@ -1578,7 +1603,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     const cacheData = {
                         url: data.image,
-                        expiry: Date.now() + (24 * 60 * 60 * 1000) // 24小时过期
+                        expiry: Date.now() + (60 * 60 * 1000) // 24小时过期
                     };
                     localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                     console.log(`图片已保存到本地缓存: ${title}`);
