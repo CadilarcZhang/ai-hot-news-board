@@ -656,7 +656,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const newsContent = template.content.cloneNode(true).querySelector('.news-content');
                 
                 newsContent.id = newsId;
-                newsContent.querySelector('.content-title').textContent = `${index + 1}. ${title}`;
+                // newsContent.querySelector('.content-title').textContent = `${index + 1}. ${title}`;
                 
                 contentArea.appendChild(newsContent);
             }

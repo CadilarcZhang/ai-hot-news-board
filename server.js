@@ -576,7 +576,7 @@ async function searchNews(query) {
                 });
                 
                 if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
-                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${googleResponse.data.items}`);
+                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
                     return googleResponse.data.items.map(item => ({
                         title: item.title,
                         link: item.link,

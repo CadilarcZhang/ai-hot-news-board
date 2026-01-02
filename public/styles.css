@@ -398,7 +398,7 @@ main {
     font-weight: 600;
     color: #ff3852;
     font-size: 1.1rem;
-    margin-bottom: 20px;
+    /* margin-bottom: 20px; */
     line-height: 1.7;
 }
 
@@ -512,7 +512,7 @@ footer {
 
 /* 文章来源链接样式 */
 .article-sources {
-    margin-bottom: 20px;
+    /* margin-bottom: 20px; */
     padding: 15px;
     background-color: #f0f7ff;
     border-left: 4px solid #4a90e2;
@@ -832,7 +832,7 @@ body.dark-mode .placeholder {
     gap: 12px;
     margin-top: 20px;
     flex-wrap: wrap;
-    padding: 0 35px 30px;
+    /* padding: 0 35px 30px; */
 }
 
 .share-btn {
@@ -1260,10 +1260,10 @@ body:not(.dark-mode) .image-loading::after {
         font-size: 16px;
         line-height: 1.8;
         color: #333;
-        padding: 20px 15px;
+        padding: 15px;
         background-color: #fafafa;
         border-radius: 12px;
-        margin: 15px 0;
+        /* margin: 15px 0; */
     }
     
     .mobile-text-content p {
@@ -1281,7 +1281,7 @@ body:not(.dark-mode) .image-loading::after {
         font-weight: 600;
         font-size: 17px;
         color: #ff3852;
-        margin-bottom: 20px;
+        /* margin-bottom: 20px; */
         line-height: 1.7;
     }
     
