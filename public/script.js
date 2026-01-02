@@ -75,19 +75,45 @@ function loadQRCodeLibrary() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    // 获取当前日期，用于作者发布时间
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
-    
-    // 更新所有发布时间显示为当前日期
-    const publishTimeElements = document.querySelectorAll('.author-meta p');
-    publishTimeElements.forEach(el => {
-        el.textContent = dateStr; // 只显示日期，格式：yyyy-MM-dd
-    });
-    
-    // 获取基础路径和当前设备类型
+    // 获取基础路径和当前设备类型（先定义，供后续使用）
     const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
     const SERVER_URL = BASE_PATH;
+    
+    // 获取服务器位置信息（省份）
+    let serverProvince = ''; // 缓存省份信息
+    
+    // 获取服务器位置信息
+    async function fetchServerLocation() {
+        try {
+            const response = await fetch(`${SERVER_URL}/api/server-location`);
+            const data = await response.json();
+            if (data && data.province) {
+                serverProvince = data.province;
+                console.log('服务器位置:', serverProvince);
+                // 更新所有已显示的日期
+                updateAllPublishTimes();
+            }
+        } catch (error) {
+            console.error('获取服务器位置失败:', error);
+        }
+    }
+    
+    // 更新所有发布时间显示（包含省份）
+    function updateAllPublishTimes() {
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
+        const publishTimeElements = document.querySelectorAll('.author-meta p');
+        publishTimeElements.forEach(el => {
+            const displayText = serverProvince ? `${dateStr} · ${serverProvince}` : dateStr;
+            el.textContent = displayText;
+        });
+    }
+    
+    // 初始化时更新日期
+    updateAllPublishTimes();
+    
+    // 异步获取服务器位置
+    fetchServerLocation();
     
     // 从URL路径中提取平台信息
     let currentPlatform = 'networkhot'; // 默认平台
@@ -1278,12 +1304,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (articleTitle) {
                 articleTitle.textContent = `《${news.title}》热搜解读`;
             }
-            // 更新发布日期为当前日期（yyyy-MM-dd格式）
+            // 更新发布日期为当前日期（yyyy-MM-dd格式）+ 省份
             const publishTime = newsContent.querySelector('.author-meta p');
             if (publishTime) {
                 const now = new Date();
                 const dateStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
-                publishTime.textContent = dateStr;
+                // 如果有缓存的省份信息，直接使用；否则先显示日期，等获取到省份后再更新
+                const displayText = serverProvince ? `${dateStr} · ${serverProvince}` : dateStr;
+                publishTime.textContent = displayText;
+                
+                // 如果还没有省份信息，尝试获取
+                if (!serverProvince) {
+                    fetchServerLocation();
+                }
             }
             
             // 检查是否已经生成过内容
