@@ -621,6 +621,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 设置或更新newsId参数
         url.searchParams.set('newsId', newsId);
+        url.searchParams.set('t', Date.now()); // 防止缓存
         
         // 使用History API更新URL，不刷新页面
         window.history.replaceState({}, '', url.toString());
@@ -1329,6 +1330,17 @@ document.addEventListener('DOMContentLoaded', function() {
             // 移动端逻辑
             const listItem = document.querySelector(`.hot-item[data-id="${news.id}"]`);
             if (listItem) {
+                // 收起所有已展开的热搜项
+                document.querySelectorAll('.hot-item.expanded').forEach(item => {
+                    if (item !== listItem) {
+                        item.classList.remove('expanded');
+                        // 移除对应的移动端内容区域
+                        const mobileContent = item.nextElementSibling;
+                        if (mobileContent && mobileContent.classList.contains('mobile-content')) {
+                            mobileContent.remove();
+                        }
+                    }
+                });
                 // 展开当前项
                 listItem.classList.add('expanded');
                 

@@ -311,7 +311,6 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
         const cachedLocation = simpleCache.get(cacheKey);
         
         if (cachedLocation) {
-            console.log('从缓存获取服务器位置信息');
             return res.json(cachedLocation);
         }
         
@@ -400,7 +399,6 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
         const cachedData = simpleCache.get(cacheKey);
         
         if (cachedData) {
-            console.log(`从缓存获取${platform}热搜数据`);
             return res.json(cachedData);
         }
         
@@ -729,16 +727,6 @@ async function searchNews(query) {
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        
-        // 调试日志（仅在开发环境）
-        if (process.env.NODE_ENV !== 'production') {
-            console.log('Google API配置检查:', {
-                hasApiKey: !!GOOGLE_API_KEY,
-                hasEngineId: !!GOOGLE_SEARCH_ENGINE_ID,
-                apiKeyPrefix: GOOGLE_API_KEY ? GOOGLE_API_KEY.substring(0, 10) + '...' : 'none',
-                engineId: GOOGLE_SEARCH_ENGINE_ID || 'none'
-            });
-        }
         
         if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
             try {
@@ -1319,7 +1307,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     let cachedArticles = simpleCache.get(cacheArticlesKey);
     
     if (cachedContent) {
-        console.log(`从缓存获取搜索生成内容: ${title}`);
+        console.log(`从缓存获取网页搜索生成内容: ${title}`);
         
         // 如果有缓存的文章链接，先发送
         if (cachedArticles && cachedArticles.length > 0) {
