@@ -836,27 +836,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 const cachedData = JSON.parse(localCache);
                 const now = Date.now();
                 
-                // 检查缓存是否过期（24小时）
+                // 检查缓存是否过期
                 if (cachedData.expiry > now) {
                     console.log(`从本地缓存获取内容: ${title}`);
-                    
+
                     // 显示缓存的内容
                     loadingElement.style.display = 'none';
                     aiContent.style.display = 'block';
-                    // firstParagraph.style.display = 'none';
-                    
+
                     // 如果有缓存的参考来源信息，先显示
                     if (cachedData.articles && cachedData.articles.length > 0) {
                         const sourcesContainer = newsContent.querySelector('.article-sources');
                         if (!sourcesContainer) {
-                            // 创建链接容器
                             const sourcesDiv = document.createElement('div');
                             sourcesDiv.className = 'article-sources';
                             sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
-                            // 插入到内容容器之前
                             contentContainer.parentNode.insertBefore(sourcesDiv, contentContainer);
                         }
-                        
+
                         const linksContainer = newsContent.querySelector('.sources-links');
                         if (linksContainer) {
                             linksContainer.innerHTML = '';
@@ -871,8 +868,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             });
                         }
                     }
-                    
-                    contentContainer.innerHTML = formatContent(cachedData.content);
+
+                    // 直接使用缓存的 HTML（如果存在），否则格式化 content 字段（向后兼容）
+                    if (cachedData.html) {
+                        contentContainer.innerHTML = cachedData.html;
+                    } else if (cachedData.content) {
+                        contentContainer.innerHTML = formatContent(cachedData.content);
+                    }
                     
                     // 生成图片
                     if (!imageContainer.innerHTML.trim()) {
@@ -967,26 +969,27 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
 
                     if (data.message) {
-                        contentContainer.innerHTML += formatContent(data.message);
+                        // 消息提示不累积，直接显示
+                        contentContainer.innerHTML = formatContent(data.message);
                     }
-                    
+
                     if (data.content) {
                         fullContent += data.content;
                         contentContainer.innerHTML = formatContent(fullContent);
                     }
                     
                     if (data.done) {
-                        // 保存到本地缓存（包括参考来源信息）
+                        // 保存到本地缓存（保存格式化后的 HTML，避免重复解析）
                         if (fullContent.trim().length > 0) {
-                            // generateImageForContent(newsId, title, fullContent, heat);
                             try {
+                                const formattedHtml = formatContent(fullContent);
                                 const cacheData = {
-                                    content: fullContent,
-                                    articles: cachedArticles, // 保存参考来源信息
-                                    expiry: Date.now() + (10 * 60 * 1000) // 10分钟过期
+                                    html: formattedHtml,  // 保存格式化后的 HTML
+                                    articles: cachedArticles,
+                                    expiry: Date.now() + (10 * 60 * 1000)
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
-                                console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
+                                console.log(`内容已保存到本地缓存: ${title}`);
                             } catch (e) {
                                 console.error('保存到本地缓存失败:', e);
                             }
@@ -1178,64 +1181,135 @@ document.addEventListener('DOMContentLoaded', function() {
     // 格式化内容，添加样式
     function formatContent(content) {
         if (!content) return '';
-        
-        // 清理文本：移除Markdown标记和不规范字符
-        let cleanedContent = content
-            // 移除Markdown标题标记（#、##、###等，包括后面的空格）
-            .replace(/^#{1,6}\s*/gm, '')
-            // 移除Markdown粗体标记（**text** 保留text，处理嵌套情况）
-            .replace(/\*\*([^*]+(?:\*[^*]+)*)\*\*/g, '$1')
-            // 移除单个星号（*text* 保留text，但不影响粗体）
-            .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '$1')
-            // 移除Markdown列表标记（-、*、+、•）
-            .replace(/^[\s]*[-*+•]\s+/gm, '')
-            // 移除Markdown数字列表标记（1. 2. 等）
-            .replace(/^\d+[\.、]\s+/gm, '')
-            // 移除Markdown代码块标记
-            .replace(/```[\s\S]*?```/g, '')
-            .replace(/`([^`]+)`/g, '$1')
-            // 移除Markdown链接标记，保留文本
-            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
-            // 移除Markdown图片标记
-            .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '')
-            // 清理多余的换行符（3个以上换行符变为2个）
-            .replace(/\n{3,}/g, '\n\n')
-            // 移除行首行尾的空白字符
-            // .replace(/^\s+|\s+$/gm, '')
-            // 清理行内的多个连续空格（保留单个空格）
-            .replace(/[ \t]{2,}/g, ' ')
-            // 移除行尾的多个空格
-            .replace(/[ \t]+$/gm, '')
+
+        // 通用方案：检查内容类型，自动选择处理方式
+        // 1. 如果内容包含 HTML 标签（已格式化），直接返回
+        // 2. 如果内容是纯文本，进行格式化处理
+
+        // 更准确的 HTML 检测：检查是否包含 <p> 标签（这是我们生成的 HTML 的特征）
+        const hasParagraphTag = /<p\s+class/i.test(content) || /<p[^>]*>/i.test(content);
+
+        if (hasParagraphTag) {
+            return content;
+        }
+
+        // 纯文本处理：清理并格式化
+        return formatPlainText(content);
+    }
+
+    // 格式化纯文本内容为 HTML
+    function formatPlainText(content) {
+        if (!content) return '';
+
+        // 1. 清理文本：移除 Markdown 标记和多余字符
+        const cleaned = cleanMarkdown(content);
+
+        // 2. 按换行符分割成段落
+        const paragraphs = splitIntoParagraphs(cleaned);
+
+        // 3. 转换为 HTML，第一段添加特殊样式
+        return paragraphsToHtml(paragraphs);
+    }
+
+    // 清理 Markdown 标记
+    function cleanMarkdown(content) {
+        return content
+            // 标准化换行符
+            .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+            // 移除 Markdown 标记
+            .replace(/^#{1,6}\s*/gm, '')           // 标题
+            .replace(/\*\*([^*]+(?:\*[^*]+)*)\*\*/g, '$1')  // 粗体
+            .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '$1')     // 斜体
+            .replace(/^[\s]*[-*+•]\s+/gm, '')       // 列表
+            .replace(/^\d+[\.、]\s+/gm, '')         // 数字列表
+            .replace(/```[\s\S]*?```/g, '')        // 代码块
+            .replace(/`([^`]+)`/g, '$1')           // 行内代码
+            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')  // 链接
+            .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '')    // 图片
+            // 清理空白字符
+            .replace(/\n{3,}/g, '\n\n')            // 多余换行
+            .replace(/[ \t]{2,}/g, ' ')            // 多余空格
+            .replace(/[ \t]+$/gm, '')              // 行尾空格
             .trim();
-        
-        // 分段落处理：按双换行符分割
-        let paragraphs = cleanedContent.split(/\n\s*\n/).filter(p => p.trim());
-        
-        // 如果没有双换行符，尝试按单换行符分割（但要过滤掉太短的行）
+    }
+
+    // 将文本分割成段落
+    function splitIntoParagraphs(content) {
+        // 优先按双换行符分割
+        let paragraphs = content.split(/\n\s*\n/).filter(p => p.trim());
+
+        // 如果双换行符分割结果不理想，尝试其他分隔符
         if (paragraphs.length <= 1) {
-            paragraphs = cleanedContent.split('\n')
+            // 尝试单换行符分割（过滤太短的行）
+            const lines = content.split('\n')
                 .map(p => p.trim())
-                .filter(p => p.length > 0 && !p.match(/^[#*\-+•\s]+$/)); // 过滤掉只有标记的行
-        }
-        
-        if (paragraphs.length === 0) {
-            // 如果还是没有段落，直接返回清理后的内容
-            return `<p>${cleanedContent}</p>`;
-        }
-        
-        // 为第一段添加特殊样式
-        let formattedContent = `<p class="first-paragraph">${escapeHtml(paragraphs[0])}</p>`;
-        
-        // 处理其余段落
-        for (let i = 1; i < paragraphs.length; i++) {
-            const paragraph = escapeHtml(paragraphs[i]);
-            // 跳过空段落或只有空白字符的段落
-            if (paragraph.trim()) {
-                formattedContent += `<p>${paragraph}</p>`;
+                .filter(p => p.length > 10);  // 只保留长度 > 10 的行
+
+            if (lines.length > 1) {
+                paragraphs = lines;
             }
         }
-        
-        return formattedContent;
+
+        // 如果还是没有段落，尝试智能分段（按句子分割）
+        if (paragraphs.length <= 1 && content.length > 200) {
+            // 按句子分割：。！？.!? 等标点符号
+            const sentences = content.split(/([。！？\.!?]+)/).filter(s => s.trim());
+
+            if (sentences.length > 2) {
+                // 将句子重新组合成段落，每段约 3-5 个句子
+                paragraphs = [];
+                let currentParagraph = '';
+
+                for (let i = 0; i < sentences.length; i++) {
+                    const sentence = sentences[i];
+                    currentParagraph += sentence;
+
+                    // 检查是否是句子结束标点
+                    if (/[。！？\.!?]/.test(sentence)) {
+                        // 如果当前段落已经有 3-5 个句子，或者字符数超过 150，开始新段落
+                        const sentenceCount = (currentParagraph.match(/[。！？\.!?]/g) || []).length;
+
+                        if (sentenceCount >= 3 || currentParagraph.length > 150) {
+                            paragraphs.push(currentParagraph.trim());
+                            currentParagraph = '';
+                        }
+                    }
+                }
+
+                // 添加最后一个段落
+                if (currentParagraph.trim()) {
+                    paragraphs.push(currentParagraph.trim());
+                }
+            }
+        }
+
+        // 如果还是没有段落，将整个内容作为一段
+        if (paragraphs.length === 0) {
+            paragraphs = [content];
+        }
+
+        return paragraphs;
+    }
+
+    // 将段落数组转换为 HTML
+    function paragraphsToHtml(paragraphs) {
+        if (!paragraphs || paragraphs.length === 0) {
+            return '';
+        }
+
+        let html = '';
+
+        paragraphs.forEach((para, index) => {
+            const escapedPara = escapeHtml(para);
+            if (index === 0) {
+                // 第一段添加特殊样式类
+                html += `<p class="first-paragraph">${escapedPara}</p>`;
+            } else if (para.trim()) {
+                html += `<p>${escapedPara}</p>`;
+            }
+        });
+
+        return html;
     }
     
     // HTML转义函数，防止XSS攻击
@@ -1438,13 +1512,17 @@ document.addEventListener('DOMContentLoaded', function() {
                             });
                         }
                     }
-                    
-                    textContent.innerHTML = formatContent(cachedData.content);
-                    // const firstParagraph = mobileContent.querySelector('.first-paragraph');
-                    // firstParagraph.style.display = 'none';
-                    // 生成图片
-                    generateMobileImage(newsId, title, cachedData.content, heat, imageContainer);
-                    
+
+                    // 直接使用缓存的 HTML（如果存在），否则格式化 content 字段
+                    if (cachedData.html) {
+                        textContent.innerHTML = cachedData.html;
+                    } else if (cachedData.content) {
+                        textContent.innerHTML = formatContent(cachedData.content);
+                    }
+
+                    // 生成图片（传递完整的参数）
+                    generateMobileImage(newsId, title, '', heat, imageContainer);
+
                     return;
                 } else {
                     // 缓存已过期，删除
@@ -1522,7 +1600,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     if (data.message) {
-                        textContent.innerHTML += formatContent(data.message);
+                        // 消息提示不累积，直接显示
+                        textContent.innerHTML = formatContent(data.message);
                     }
                     if (data.content) {
                         fullContent += data.content;
@@ -1530,16 +1609,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     if (data.done) {
-                        // 保存到本地缓存（包括参考来源信息）
+                        // 保存到本地缓存（保存格式化后的 HTML，避免重复解析）
                         if (fullContent.trim().length > 0) {
                             try {
+                                const formattedHtml = formatContent(fullContent);
                                 const cacheData = {
-                                    content: fullContent,
-                                    articles: cachedArticles, // 保存参考来源信息
-                                    expiry: Date.now() + (10 * 60 * 1000) // 10分钟过期
+                                    html: formattedHtml,  // 保存格式化后的 HTML
+                                    articles: cachedArticles,
+                                    expiry: Date.now() + (10 * 60 * 1000)
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
-                                console.log(`内容已保存到本地缓存: ${title}，包含 ${cachedArticles.length} 个参考来源`);
+                                console.log(`内容已保存到本地缓存: ${title}`);
                             } catch (e) {
                                 console.error('保存到本地缓存失败:', e);
                             }
