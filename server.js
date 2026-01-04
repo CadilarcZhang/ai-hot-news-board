@@ -393,12 +393,15 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
 app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
     try {
         const platform = req.query.platform || 'networkhot';
-        
+        const refresh = req.query.refresh === 'true';
+        if (refresh) {
+            console.log(`强制刷新热搜数据，平台: ${platform}`);
+        }
         // 尝试从缓存获取热搜数据
         const cacheKey = `hot-news-${platform}`;
         const cachedData = simpleCache.get(cacheKey);
         
-        if (cachedData) {
+        if (cachedData && !refresh) {
             return res.json(cachedData);
         }
         

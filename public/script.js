@@ -534,7 +534,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.head.appendChild(toastStyle);
     
     // 获取热搜数据
-    function fetchHotNews(platform = 'networkhot') {
+    function fetchHotNews(platform = 'networkhot', refresh = false) {
         // 更新当前平台
         currentPlatform = platform;
         
@@ -551,7 +551,7 @@ document.addEventListener('DOMContentLoaded', function() {
         hotNewsList.innerHTML = '<div class="loading-list">加载热搜数据中...</div>';
         
         // 调用Node.js服务器API获取热搜数据
-        fetch(`${SERVER_URL}/api/hot-news?platform=${platform}`)
+        fetch(`${SERVER_URL}/api/hot-news?platform=${platform}&refresh=${refresh}`)
             .then(response => response.json())
             .then(data => {
                 if (data.code === 200) {
@@ -601,7 +601,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 构建新的路径
         let newPath = BASE_PATH;
-        if (platform !== 'weibo') { // 如果不是默认平台，添加到路径
+        if (platform !== 'networkhot') { // 如果不是默认平台，添加到路径
             newPath = `${BASE_PATH}/${platform}`;
         }
         
@@ -620,7 +620,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const url = new URL(window.location.href);
         
         // 设置或更新newsId参数
-        url.searchParams.set('newsId', newsId);
+        url.searchParams.set('newsId', 1);
         url.searchParams.set('t', Date.now()); // 防止缓存
         
         // 使用History API更新URL，不刷新页面
@@ -789,7 +789,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }, 1000);
                 }
                 
-                fetchHotNews(currentPlatform);
+                fetchHotNews(currentPlatform, true);
             });
         }
         
