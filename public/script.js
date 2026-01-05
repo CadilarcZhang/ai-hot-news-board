@@ -5,6 +5,74 @@ function trackEvent(eventName, properties = {}) {
     }
 }
 
+// Vercel Speed Insights 性能监控函数
+function trackPerformance(metricName, value, unit = 'ms') {
+    if (typeof window !== 'undefined' && window.va) {
+        window.va('track', 'Performance Metric', {
+            metric_name: metricName,
+            metric_value: value,
+            metric_unit: unit,
+            page_path: window.location.pathname,
+            timestamp: new Date().toISOString()
+        });
+    }
+}
+
+// Web Vitals 性能监控
+function trackWebVitals() {
+    if (typeof window !== 'undefined' && window.va) {
+        // 监控 Core Web Vitals
+        if ('PerformanceObserver' in window) {
+            try {
+                // 监控 LCP (Largest Contentful Paint)
+                const lcpObserver = new PerformanceObserver((list) => {
+                    const entries = list.getEntries();
+                    const lastEntry = entries[entries.length - 1];
+                    if (lastEntry) {
+                        trackPerformance('LCP', Math.round(lastEntry.startTime), 'ms');
+                    }
+                });
+                lcpObserver.observe({ type: 'largest-contentful-paint', buffered: true });
+
+                // 监控 FID (First Input Delay)
+                const fidObserver = new PerformanceObserver((list) => {
+                    const entries = list.getEntries();
+                    entries.forEach(entry => {
+                        if (entry.name === 'first-input') {
+                            trackPerformance('FID', Math.round(entry.processingStart - entry.startTime), 'ms');
+                        }
+                    });
+                });
+                fidObserver.observe({ type: 'first-input', buffered: true });
+
+                // 监控 CLS (Cumulative Layout Shift)
+                const clsObserver = new PerformanceObserver((list) => {
+                    const entries = list.getEntries();
+                    let clsValue = 0;
+                    entries.forEach(entry => {
+                        if (!entry.hadRecentInput) {
+                            clsValue += entry.value;
+                        }
+                    });
+                    if (clsValue > 0) {
+                        trackPerformance('CLS', Math.round(clsValue * 1000), 'unit');
+                    }
+                });
+                clsObserver.observe({ type: 'layout-shift', buffered: true });
+
+                // 监控 TTFB (Time to First Byte)
+                if (window.performance && window.performance.timing) {
+                    const timing = window.performance.timing;
+                    const ttfb = timing.responseStart - timing.navigationStart;
+                    trackPerformance('TTFB', Math.round(ttfb), 'ms');
+                }
+            } catch (error) {
+                console.warn('Web Vitals monitoring not fully supported:', error);
+            }
+        }
+    }
+}
+
 // 动态加载 QRCode 库
 let qrcodeLoading = false;
 let qrcodeLoaded = false;
@@ -89,6 +157,9 @@ document.addEventListener('DOMContentLoaded', function() {
         referrer: document.referrer,
         timestamp: new Date().toISOString()
     });
+
+    // 启动 Web Vitals 性能监控
+    trackWebVitals();
 
     // 获取基础路径和当前设备类型（先定义，供后续使用）
     const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
@@ -641,7 +712,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 设置或更新newsId参数
         url.searchParams.set('newsId', 1);
-        url.searchParams.set('t', Date.now()); // 防止缓存
+        // url.searchParams.set('t', Date.now()); // 防止缓存
         
         // 使用History API更新URL，不刷新页面
         window.history.replaceState({}, '', url.toString());
@@ -727,13 +798,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 const newsId = this.dataset.id;
                 updateUrlWithNewsId(newsId);
 
-                // 跟踪热搜点击事件
+                // 跟踪热搜点击事件和性能指标
+                const startTime = performance.now();
                 trackEvent('热搜点击', {
                     newsId: newsId,
                     title: title,
                     rank: index + 1,
                     platform: currentPlatform
                 });
+
+                // 记录点击后的加载性能
+                setTimeout(() => {
+                    const loadTime = performance.now() - startTime;
+                    trackPerformance('内容加载时间', loadTime, 'ms');
+                }, 100);
 
                 // 显示对应的内容区域
                 showNewsContent({
@@ -1137,8 +1215,12 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => {
             if (data.image) {
                 // 显示生成的图片
+                const imageDisplayTime = performance.now();
                 imageContainer.innerHTML = `<img src="${data.image}" alt="${title}" class="generated-image">`;
                 imageContainer.classList.add('loaded');
+
+                // 记录图片加载性能
+                trackPerformance('图片显示时间', imageDisplayTime - aiContentStartTime, 'ms');
                 
                 // 保存到本地缓存
                 try {

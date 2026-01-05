@@ -7,7 +7,10 @@
       "Bash(pkill:*)",
       "Bash(lsof:*)",
       "Bash(xargs kill:*)",
-      "Bash(PORT=3001 BASE_PATH=\"/hot-news\" node:*)"
+      "Bash(PORT=3001 BASE_PATH=\"/hot-news\" node:*)",
+      "Bash(PORT=3001 node:*)",
+      "Bash(kill:*)",
+      "Bash(tee:*)"
     ]
   }
 }
