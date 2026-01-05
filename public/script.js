@@ -695,7 +695,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (platform !== 'networkhot') { // 如果不是默认平台，添加到路径
             newPath = `${BASE_PATH}/${platform}`;
         }
-        
+        url.searchParams.set('newsId', 1);
         // 设置新的URL路径
         url.pathname = newPath;
         
@@ -711,7 +711,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const url = new URL(window.location.href);
         
         // 设置或更新newsId参数
-        url.searchParams.set('newsId', 1);
+        url.searchParams.set('newsId', newsId);
         // url.searchParams.set('t', Date.now()); // 防止缓存
         
         // 使用History API更新URL，不刷新页面
@@ -1163,6 +1163,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function generateImageForContent(newsId, title, content, heat) {
         const newsContent = document.getElementById(`news-${newsId}`);
         const imageContainer = newsContent.querySelector('.image-container');
+
+        // 记录图片生成开始时间
+        const aiContentStartTime = performance.now();
         
         // 检查本地存储中是否有图片缓存
         const localCacheKey = `image-${title}`;
