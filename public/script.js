@@ -1,3 +1,10 @@
+// Vercel Analytics 事件跟踪函数
+function trackEvent(eventName, properties = {}) {
+    if (typeof window !== 'undefined' && window.va) {
+        window.va('track', eventName, properties);
+    }
+}
+
 // 动态加载 QRCode 库
 let qrcodeLoading = false;
 let qrcodeLoaded = false;
@@ -75,6 +82,14 @@ function loadQRCodeLibrary() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    // 跟踪页面访问事件
+    trackEvent('页面访问', {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        referrer: document.referrer,
+        timestamp: new Date().toISOString()
+    });
+
     // 获取基础路径和当前设备类型（先定义，供后续使用）
     const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
     const SERVER_URL = BASE_PATH;
@@ -216,11 +231,16 @@ document.addEventListener('DOMContentLoaded', function() {
         // 添加点击事件
         themeToggleBtn.addEventListener('click', function() {
             document.body.classList.toggle('dark-mode');
-            
+
             // 更新所有需要暗黑模式的元素
             const isDarkMode = document.body.classList.contains('dark-mode');
             applyDarkMode(isDarkMode);
-            
+
+            // 跟踪主题切换事件
+            trackEvent('主题切换', {
+                theme: isDarkMode ? 'dark' : 'light'
+            });
+
             // 保存主题设置到本地存储
             localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
         });
@@ -706,7 +726,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 更新URL，但不刷新页面
                 const newsId = this.dataset.id;
                 updateUrlWithNewsId(newsId);
-                
+
+                // 跟踪热搜点击事件
+                trackEvent('热搜点击', {
+                    newsId: newsId,
+                    title: title,
+                    rank: index + 1,
+                    platform: currentPlatform
+                });
+
                 // 显示对应的内容区域
                 showNewsContent({
                     id: index + 1,
@@ -772,6 +800,13 @@ document.addEventListener('DOMContentLoaded', function() {
         platformTabs.forEach(tab => {
             tab.addEventListener('click', function() {
                 const platform = this.dataset.platform;
+
+                // 跟踪平台切换事件
+                trackEvent('平台切换', {
+                    platform: platform,
+                    previousPlatform: currentPlatform
+                });
+
                 fetchHotNews(platform);
             });
         });
@@ -783,12 +818,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 const icon = this.querySelector('i');
                 if (icon) {
                     icon.classList.add('rotating');
-                    
+
                     setTimeout(() => {
                         icon.classList.remove('rotating');
                     }, 1000);
                 }
-                
+
+                // 跟踪刷新事件
+                trackEvent('手动刷新', {
+                    platform: currentPlatform
+                });
+
                 fetchHotNews(currentPlatform, true);
             });
         }
