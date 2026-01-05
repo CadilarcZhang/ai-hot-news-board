@@ -567,6 +567,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                 // 不限制token数量，确保内容完整
                 "temperature": 0.7, // 降低温度，使生成更确定性
                 "top_p": 0.95,
+                "enable_thinking": false,
                 "response_format": {
                     "type": "text"
                 }
@@ -963,7 +964,7 @@ async function fetchMultipleArticles(query) {
         if (articles.length === 0) {
             return { content: null, articles: [] };
         }
-        console.log("articles: " + JSON.stringify(articles));
+        console.log("文章片段合并结果: " + JSON.stringify(articles));
         
         // 合并多篇文章内容
         let combinedContent = `根据搜索关键词"${query}"，我找到了以下相关新闻文章：\n\n`;
@@ -1413,6 +1414,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             },
             data: {
                 "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+                // "model": "Pro/zai-org/GLM-4.7",
                 "messages": [
                     {
                         "role": "system",
@@ -1426,6 +1428,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 "stream": true,
                 "temperature": 0.7,
                 "top_p": 0.95,
+                "enable_thinking": false,
                 "response_format": {
                     "type": "text"
                 }
@@ -1783,6 +1786,7 @@ app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
                         ],
                         "temperature": 0.7,
                         "top_p": 0.95,
+                        "enable_thinking": false,
                         "response_format": {
                             "type": "text"
                         }
