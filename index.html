@@ -94,11 +94,22 @@
 <!-- 添加脚本 -->
 <script src="script.js"></script>
 
-<!-- Vercel Web Analytics -->
+<!-- Vercel Web Analytics - 仅在生产环境加载 -->
 <script>
     window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+
+    // 检测是否在生产环境（非本地开发环境）
+    if (typeof window !== 'undefined' &&
+        !window.location.hostname.includes('localhost') &&
+        !window.location.hostname.includes('127.0.0.1') &&
+        !window.location.hostname.includes('0.0.0.0')) {
+
+        const script = document.createElement('script');
+        script.defer = true;
+        script.src = '/_vercel/insights/script.js';
+        document.head.appendChild(script);
+    }
 </script>
-<script defer src="/_vercel/insights/script.js"></script>
 
 <!-- 添加内联脚本确保分享按钮功能正常 -->
 <script>
