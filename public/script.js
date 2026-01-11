@@ -149,6 +149,34 @@ function loadQRCodeLibrary() {
     });
 }
 
+async function saveToHistory(news) {
+    try {
+        const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
+        const response = await fetch(`${BASE_PATH}/api/hot-news/history`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                platform: news.platform,
+                news: [{
+                    title: news.title,
+                    heat: news.heat,
+                    rank: news.id,
+                    content: news.content
+                }]
+            })
+        });
+        if (!response.ok) {
+            console.error('Failed to save to history:', await response.text());
+        } else {
+            console.log('Saved to history:', news.title);
+        }
+    } catch (error) {
+        console.error('Error saving to history:', error);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     // 跟踪页面访问事件
     trackEvent('页面访问', {
@@ -216,9 +244,12 @@ document.addEventListener('DOMContentLoaded', function () {
     // 检测是否为移动设备
     const isMobile = window.innerWidth <= 768;
 
-    // 从URL获取newsId参数
-    const urlParams = new URLSearchParams(window.location.search);
-    const targetNewsId = urlParams.get('newsId');
+    let targetNewsId = null;
+
+    (function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        targetNewsId = urlParams.get('newsId');
+    })();
 
     // 主题切换功能
     initThemeToggle();
@@ -601,12 +632,133 @@ document.addEventListener('DOMContentLoaded', function () {
     `;
     document.head.appendChild(toastStyle);
 
+    function fetchHistory() {
+        const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
+
+        currentPlatform = 'history';
+        targetNewsId = null;
+
+        document.querySelectorAll('.platform-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.platform === 'history');
+        });
+
+        const hotNewsList = document.getElementById('hot-news-list');
+        hotNewsList.innerHTML = '<div class="loading-list">加载历史记录中...</div>';
+
+        fetch(`${BASE_PATH}/api/hot-news/history`)
+            .then(response => response.json())
+            .then(data => {
+                if (Array.isArray(data) && data.length > 0) {
+                    renderHistoryList(data);
+                } else {
+                    hotNewsList.innerHTML = '<div class="loading-list">暂无浏览历史</div>';
+                }
+            })
+            .catch(error => {
+                console.error('获取历史记录失败:', error);
+                hotNewsList.innerHTML = '<div class="loading-list">加载历史记录失败</div>';
+            });
+    }
+
+    function renderHistoryList(historyData) {
+        const hotNewsList = document.getElementById('hot-news-list');
+        hotNewsList.innerHTML = '';
+
+        historyData.forEach((item, index) => {
+            const li = document.createElement('li');
+            li.className = 'hot-item';
+            li.dataset.id = index + 1;
+            li.dataset.historyId = item._id;
+
+            const rankClass = index < 3 ? ` top${index + 1}` : '';
+
+            const date = new Date(item.snapshotTime);
+            const timeStr = date.toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            const platformMap = {
+                'networkhot': '全网',
+                'toutiao': '头条',
+                'douyin': '抖音'
+            };
+            const platformName = platformMap[item.platform] || item.platform;
+
+            li.innerHTML = `
+                <span class="hot-rank${rankClass}">${index + 1}</span>
+                <span class="hot-title" title="${item.title}">${item.title}</span>
+                <span class="hot-heat" title="平台: ${platformName} | 浏览时间: ${timeStr}">${item.heat}</span>
+                <button class="history-delete-btn" aria-label="删除">✕</button>
+            `;
+
+            li.addEventListener('click', function(e) {
+                if (!e.target.closest('.history-delete-btn')) {
+                    document.querySelectorAll('.hot-item').forEach(item => {
+                        item.classList.remove('active');
+                    });
+                    this.classList.add('active');
+
+                    showNewsContent({
+                        id: index + 1,
+                        title: item.title,
+                        heat: item.heat
+                    });
+                }
+            });
+
+            const deleteBtn = li.querySelector('.history-delete-btn');
+            deleteBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                deleteHistoryItem(item._id, li);
+            });
+
+            hotNewsList.appendChild(li);
+        });
+    }
+
+    function deleteHistoryItem(id, itemElement) {
+        const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
+
+        if (confirm('确定删除这条历史记录吗?')) {
+            fetch(`${BASE_PATH}/api/hot-news/history/${id}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    itemElement.remove();
+                    showToast('已删除历史记录');
+                }
+            })
+            .catch(error => {
+                console.error('删除失败:', error);
+                showToast('删除失败');
+            });
+        }
+    }
+
+    function showToast(message) {
+        let toast = document.querySelector('.toast-notification');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.className = 'toast-notification';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = message;
+        toast.classList.add('show');
+        setTimeout(() => {
+            toast.classList.remove('show');
+        }, 3000);
+    }
+
     // 获取热搜数据
     function fetchHotNews(platform = 'networkhot', refresh = false) {
-        // 更新当前平台
         currentPlatform = platform;
+        targetNewsId = null;
 
-        // 更新URL中的平台信息
         updateUrlWithPlatform(platform);
 
         // 更新平台标签的激活状态
@@ -618,29 +770,35 @@ document.addEventListener('DOMContentLoaded', function () {
         const hotNewsList = document.getElementById('hot-news-list');
         hotNewsList.innerHTML = '<div class="loading-list">加载热搜数据中...</div>';
 
-        // 调用Node.js服务器API获取热搜数据
         fetch(`${SERVER_URL}/api/hot-news?platform=${platform}&refresh=${refresh}`)
             .then(response => response.json())
             .then(data => {
                 if (data.code === 200) {
                     renderHotNewsList(data.result.list);
 
-                    // 如果URL中有newsId参数，自动选中对应的热搜
                     if (targetNewsId) {
                         setTimeout(() => {
                             selectNewsByIndex(parseInt(targetNewsId));
                         }, 300);
+                    } else {
+                        setTimeout(() => {
+                            selectNewsByIndex(1);
+                        }, 300);
                     }
                 } else {
                     console.error('获取热搜失败:', data.msg || data.error);
-                    // 如果API调用失败，使用备用数据
                     renderHotNewsList(getFallbackData(platform));
+                    setTimeout(() => {
+                        selectNewsByIndex(1);
+                    }, 300);
                 }
             })
             .catch(error => {
                 console.error('API请求错误:', error);
-                // 如果API调用出错，使用备用数据
                 renderHotNewsList(getFallbackData(platform));
+                setTimeout(() => {
+                    selectNewsByIndex(1);
+                }, 300);
             });
     }
 
@@ -664,19 +822,14 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateUrlWithPlatform(platform) {
         if (!platform) return;
 
-        // 创建新的URL对象
         const url = new URL(window.location.href);
 
-        // 构建新的路径
         let newPath = BASE_PATH;
-        if (platform !== 'networkhot') { // 如果不是默认平台，添加到路径
+        if (platform !== 'networkhot') {
             newPath = `${BASE_PATH}/${platform}`;
         }
-        url.searchParams.set('newsId', 1);
-        // 设置新的URL路径
         url.pathname = newPath;
 
-        // 使用History API更新URL，不刷新页面
         window.history.replaceState({}, '', url.toString());
     }
 
@@ -794,12 +947,22 @@ document.addEventListener('DOMContentLoaded', function () {
                     trackPerformance('内容加载时间', loadTime, 'ms');
                 }, 100);
 
-                // 显示对应的内容区域
-                showNewsContent({
-                    id: index + 1,
-                    title: title,
-                    heat: heat
-                });
+                 // 显示对应的内容区域
+                 showNewsContent({
+                     id: index + 1,
+                     title: title,
+                     heat: heat
+                 });
+
+                 // 保存到浏览历史（排除历史 Tab）
+                 if (currentPlatform !== 'history') {
+                     saveToHistory({
+                         id: index + 1,
+                         title: title,
+                         heat: heat,
+                         platform: currentPlatform
+                     });
+                 }
             });
 
             // 注意：移动端toggle按钮的事件处理已通过事件委托在hotNewsList上统一处理
@@ -860,13 +1023,16 @@ document.addEventListener('DOMContentLoaded', function () {
             tab.addEventListener('click', function () {
                 const platform = this.dataset.platform;
 
-                // 跟踪平台切换事件
+                if (platform === 'history') {
+                    fetchHistory();
+                } else {
+                    fetchHotNews(platform);
+                }
+
                 trackEvent('平台切换', {
                     platform: platform,
                     previousPlatform: currentPlatform
                 });
-
-                fetchHotNews(platform);
             });
         });
 

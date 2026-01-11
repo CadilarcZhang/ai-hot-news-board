@@ -1690,10 +1690,15 @@ if (BASE_PATH && BASE_PATH !== '/') {
     });
 }
 
+// 加载历史记录路由（内存存储版本）
+const historyRoutes = require('./routes/historyRoutes');
+app.use(`${BASE_PATH}/api/hot-news/history`, historyRoutes);
+
 // 启动服务器
 app.listen(PORT, () => {
     console.log(`服务器运行在 http://localhost:${PORT}`);
     console.log(`应用访问地址: http://localhost:${PORT}${BASE_PATH}`);
+    console.log(`📚 历史记录功能: 已启用 (内存存储)`);
 });
 
 // 确保在最后导出app以供Vercel使用
