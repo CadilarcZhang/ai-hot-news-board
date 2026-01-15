@@ -199,11 +199,11 @@ app.get(`${BASE_PATH}/test`, (req, res) => {
     res.send('服务器正在运行');
 });
 
-// 天行API密钥（优先使用环境变量）
-const TIANAPI_KEY = process.env.TIANAPI_KEY || 'eb50731204ecb974aa2fcc8f22478f42';
+// 天行API密钥
+const TIANAPI_KEY = process.env.TIANAPI_KEY;
 
-// AI API密钥（优先使用环境变量）
-const AI_API_KEY = process.env.AI_API_KEY || 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo';
+// AI API密钥
+const AI_API_KEY = process.env.AI_API_KEY;
 
 // 省份名称中英文映射表
 const provinceNameMap = {
