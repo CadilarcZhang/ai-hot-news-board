@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **重要说明：** 本项目的所有开发活动必须严格遵守全局 CLAUDE.md 规范 (`~/.claude/CLAUDE.md`)，包括但不限于：
+> - 代码质量原则（KISS、DRY、单一职责等）
+> - Git 提交规范（feat/fix/docs/style 前缀）
+> - 安全规范（敏感信息禁止硬编码、使用环境变量）
+> - 命名规范（camelCase、PascalCase、UPPER_SNAKE_CASE）
+> - API 设计规范（RESTful、状态码规范）
+> - 错误处理规范（Fail Fast、明确错误信息）
+>
+> 项目级配置仅用于提供项目上下文信息，**全局规范优先级最高**。
+
 ## Project Overview
 
 This is an AI-powered hot news aggregation and content generation platform built with Node.js/Express. It fetches trending topics from multiple Chinese platforms (Weibo, Toutiao, Douyin) and uses AI to generate professional analysis and images for each news item.

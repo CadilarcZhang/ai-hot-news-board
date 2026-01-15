@@ -45,7 +45,8 @@
       "Bash(vercel:*)",
       "Bash(vercel whoami)",
       "Bash(ls:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git show:*)"
     ]
   },
   "hooks": {
