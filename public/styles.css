@@ -162,19 +162,29 @@ main {
 
 .platform-tabs {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
     border-bottom: 1px solid #eee;
     padding-bottom: 20px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
 }
 
 .platform-tab {
     background: none;
     border: none;
-    padding: 8px 15px;
+    padding: 8px 16px;
     cursor: pointer;
     font-size: 0.9rem;
     color: #666;
     border-radius: 5px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    min-width: fit-content;
+}
+
+.platform-tab i {
+    margin-right: 4px;
 }
 
 .platform-tab.active {
@@ -191,6 +201,14 @@ main {
     font-size: 0.9rem;
     color: #666;
     border-radius: 5px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    min-width: fit-content;
+}
+
+.refresh-btn i {
+    margin-right: 4px;
+}
 }
 
 .refresh-btn:hover {
@@ -260,6 +278,34 @@ main {
     font-size: 0.8rem;
     color: #999;
     white-space: nowrap;
+}
+
+.history-delete-btn {
+    background: none;
+    border: none;
+    color: #999;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 8px;
+    margin-left: 8px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.history-delete-btn:hover {
+    color: #ff3852;
+}
+
+.hot-item:hover .history-delete-btn {
+    opacity: 1;
+}
+
+@media (max-width: 768px) {
+    .history-delete-btn {
+        display: none;
+    }
 }
 
 /* 右侧面板 */
@@ -818,6 +864,14 @@ body.dark-mode .hot-item:hover {
 
 body.dark-mode .hot-title {
     color: #e0e0e0;
+}
+
+body.dark-mode .history-delete-btn {
+    color: #666;
+}
+
+body.dark-mode .history-delete-btn:hover {
+    color: #ff6b81;
 }
 
 body.dark-mode .content-area {

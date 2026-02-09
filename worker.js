@@ -1,8 +1,10 @@
+require('dotenv').config();
+
 const Queue = require('bull');
 const axios = require('axios');
 
 // AI API密钥
-const AI_API_KEY = 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo';
+const AI_API_KEY = process.env.AI_API_KEY;
 
 // 创建内容生成队列
 const contentQueue = new Queue('content-generation');

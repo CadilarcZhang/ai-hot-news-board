@@ -10,7 +10,56 @@
       "Bash(PORT=3001 BASE_PATH=\"/hot-news\" node:*)",
       "Bash(PORT=3001 node:*)",
       "Bash(kill:*)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "mcp__plugin_playwright_playwright__browser_click",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_evaluate",
+      "Bash(npx vercel:*)",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__click",
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__select_page",
+      "mcp__chrome-devtools__fill",
+      "mcp__zai-mcp-server__analyze_image",
+      "mcp__chrome-devtools__list_console_messages",
+      "mcp__chrome-devtools__wait_for",
+      "mcp__web-reader__webReader",
+      "mcp__Neon__list_projects",
+      "mcp__Neon__fetch",
+      "mcp__Neon__search",
+      "mcp__Neon__get_database_tables",
+      "mcp__Neon__list_organizations",
+      "mcp__Neon__describe_project",
+      "mcp__Neon__run_sql",
+      "Bash(PGPASSWORD=\"\" psql:*)",
+      "Bash(npm init:*)",
+      "Bash(export:*)",
+      "Bash(claude mcp:*)",
+      "Bash(vercel projects list)",
+      "Bash(vercel logs:*)",
+      "Bash(vercel ls:*)",
+      "Bash(vercel project:*)",
+      "Bash(vercel env ls:*)",
+      "Bash(vercel:*)",
+      "Bash(vercel whoami)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(git show:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-tool-call.py"
+          }
+        ]
+      }
     ]
   }
 }

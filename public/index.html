@@ -39,15 +39,33 @@
                     <button class="platform-tab" data-platform="douyin">
                         <span>抖音</span>
                     </button>
+                    <button class="platform-tab" data-platform="history">
+                        <i class="fas fa-history"></i> 历史
+                    </button>
                     <button class="refresh-btn">
                         <i class="fas fa-sync-alt"></i> 刷新
                     </button>
                 </div>
-                
-                <div class="hot-list">
+
+                <div class="hot-list" id="hot-list-container">
                     <ul id="hot-news-list">
                         <!-- 热搜列表将通过JavaScript动态生成 -->
                     </ul>
+                    <div id="history-list-container" style="display: none;">
+                        <div class="history-controls">
+                            <input type="date" id="history-date" />
+                            <select id="history-platform">
+                                <option value="">全部平台</option>
+                                <option value="networkhot">全网</option>
+                                <option value="toutiao">头条</option>
+                                <option value="douyin">抖音</option>
+                            </select>
+                            <button id="history-search-btn">搜索</button>
+                        </div>
+                        <ul id="history-list">
+                            <!-- 历史记录将通过JavaScript动态生成 -->
+                        </ul>
+                    </div>
                 </div>
             </div>
             
