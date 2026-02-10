@@ -30,12 +30,12 @@ const { chromium } = require('playwright');
     await page.locator('#hot-news-list .hot-item').nth(1).click();
     await page.waitForTimeout(3000);
 
-    let history = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
-    console.log(`   历史记录数: ${history.length}`);
-    if (history.length > 0) {
-      console.log(`   ✓ 保存成功: "${history[0].title}"`);
-      console.log(`   - 平台字段: ${history[0].platform}`);
-      console.log(`   - 浏览时间: ${history[0].browseTime}\n`);
+    let historyData = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
+    console.log(`   历史记录数: ${historyData.length}`);
+    if (historyData.length > 0) {
+      console.log(`   ✓ 保存成功: "${historyData[0].title}"`);
+      console.log(`   - 平台字段: ${historyData[0].platform}`);
+      console.log(`   - 浏览时间: ${historyData[0].browseTime}\n`);
     }
 
     // 4. 点击"历史" Tab
@@ -73,9 +73,9 @@ const { chromium } = require('playwright');
       await deleteBtn.click();
       await page.waitForTimeout(1000);
 
-      history = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
+      historyData = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
       const afterDeleteCount = await page.$$('#history-list .hot-item').then(items => items.length);
-      console.log(`   storage记录数: ${history.length}`);
+      console.log(`   storage记录数: ${historyData.length}`);
       console.log(`   列表显示数: ${afterDeleteCount}`);
       console.log('   ✓ 删除功能正常\n');
     } else {
@@ -93,28 +93,28 @@ const { chromium } = require('playwright');
     await page.locator('#hot-news-list .hot-item').nth(2).click();
     await page.waitForTimeout(2000);
 
-    history = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
-    console.log(`   添加两条后记录数: ${history.length}`);
+    historyData = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
+    console.log(`   添加两条后记录数: ${historyData.length}`);
 
     // 再次点击第2条，测试去重
     console.log('   再次点击第2条...');
     await page.locator('#hot-news-list .hot-item').nth(1).click();
     await page.waitForTimeout(2000);
 
-    history = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
-    console.log(`   去重后记录数: ${history.length}`);
+    historyData = await page.evaluate(() => JSON.parse(localStorage.getItem('hot_news_history') || '[]'));
+    console.log(`   去重后记录数: ${historyData.length}`);
 
-    if (history.length === 2) {
+    if (historyData.length === 2) {
       console.log('   ✓ 去重正常: 删除旧记录，只保留1条新记录');
-    } else if (history.length === 3) {
+    } else if (historyData.length === 3) {
       console.log('   ✗ 去重失败: 新增了记录而非更新');
     } else {
-      console.log(`   ? 记录数异常: ${history.length}`);
+      console.log(`   ? 记录数异常: ${historyData.length}`);
     }
 
     // 显示当前历史
     console.log('\n   当前历史记录:');
-    history.forEach((h, i) => console.log(`     ${i + 1}. ${h.title}`));
+    historyData.forEach((h, i) => console.log(`     ${i + 1}. ${h.title}`));
 
     // 7. 验证历史列表显示
     console.log('\n7. 切换到历史Tab验证显示');
