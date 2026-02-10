@@ -280,32 +280,49 @@ main {
     white-space: nowrap;
 }
 
+/* 历史列表样式 */
+#history-list {
+    display: none;
+}
+
+.history-item {
+    position: relative;
+}
+
+.history-item .hot-title {
+    padding-right: 30px;
+}
+
+.history-time {
+    font-size: 0.7rem;
+    color: #999;
+    margin-left: 10px;
+}
+
 .history-delete-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
     background: none;
     border: none;
     color: #999;
-    font-size: 1.2rem;
+    font-size: 1rem;
     cursor: pointer;
-    padding: 0 8px;
-    margin-left: 8px;
+    padding: 5px 8px;
     opacity: 0;
     transition: opacity 0.2s ease;
-    line-height: 1;
-    flex-shrink: 0;
+}
+
+.history-item:hover .history-delete-btn {
+    opacity: 1;
 }
 
 .history-delete-btn:hover {
     color: #ff3852;
 }
 
-.hot-item:hover .history-delete-btn {
-    opacity: 1;
-}
-
 @media (max-width: 768px) {
-    .history-delete-btn {
-        display: none;
-    }
 }
 
 /* 右侧面板 */
@@ -864,6 +881,10 @@ body.dark-mode .hot-item:hover {
 
 body.dark-mode .hot-title {
     color: #e0e0e0;
+}
+
+body.dark-mode .history-time {
+    color: #999;
 }
 
 body.dark-mode .history-delete-btn {
