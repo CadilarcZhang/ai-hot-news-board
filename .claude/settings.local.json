@@ -46,9 +46,23 @@
       "Bash(vercel whoami)",
       "Bash(ls:*)",
       "Bash(grep:*)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "mcp__plugin_playwright_playwright__browser_console_messages",
+      "mcp__plugin_playwright_playwright__browser_handle_dialog"
     ]
   },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "MiniMax",
+    "web-reader",
+    "web-search-prime",
+    "zai-mcp-server",
+    "zread",
+    "chrome-devtools",
+    "Neon",
+    "supabase",
+    "vercel"
+  ],
   "hooks": {
     "PostToolUse": [
       {
