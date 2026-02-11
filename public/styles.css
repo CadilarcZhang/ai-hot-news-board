@@ -168,6 +168,12 @@ main {
     padding-bottom: 20px;
     overflow-x: auto;
     flex-wrap: nowrap;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.platform-tabs::-webkit-scrollbar {
+    display: none;
 }
 
 .platform-tab {
