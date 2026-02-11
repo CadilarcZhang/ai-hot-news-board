@@ -149,31 +149,212 @@ function loadQRCodeLibrary() {
     });
 }
 
-async function saveToHistory(news) {
+// ==================== 浏览历史模块 ====================
+const HISTORY_STORAGE_KEY = 'hot_news_history';
+const MAX_HISTORY_ITEMS = 15;
+let isAutoSelecting = false; // 标志：是否正在自动选择（切换Tab/初始化）
+
+/**
+ * 获取浏览历史列表
+ * @returns {Array} 历史记录数组
+ */
+function getHistoryList() {
     try {
-        const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
-        const response = await fetch(`${BASE_PATH}/api/hot-news/history`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                platform: news.platform,
-                news: [{
-                    title: news.title,
-                    heat: news.heat,
-                    rank: news.id,
-                    content: news.content
-                }]
-            })
-        });
-        if (!response.ok) {
-            console.error('Failed to save to history:', await response.text());
-        } else {
-            console.log('Saved to history:', news.title);
-        }
+        const data = localStorage.getItem(HISTORY_STORAGE_KEY);
+        return data ? JSON.parse(data) : [];
     } catch (error) {
-        console.error('Error saving to history:', error);
+        console.error('获取浏览历史失败:', error);
+        return [];
+    }
+}
+
+/**
+ * 保存浏览历史
+ * @param {Object} news - 热搜对象 { title, heat, platform, content }
+ */
+function saveToHistory(news) {
+    try {
+        const history = getHistoryList();
+
+        // 检查是否已存在同标题记录
+        const existingIndex = history.findIndex(item => item.title === news.title);
+
+        if (existingIndex !== -1) {
+            // 已存在：删除旧记录
+            history.splice(existingIndex, 1);
+        }
+
+        // 添加新记录到顶部
+        history.unshift({
+            id: Date.now().toString(36) + Math.random().toString(36).substr(2, 9),
+            title: news.title,
+            heat: news.heat,
+            platform: news.platform,
+            browseTime: new Date().toISOString(),
+            content: news.content || null
+        });
+
+        // 限制数量
+        if (history.length > MAX_HISTORY_ITEMS) {
+            history.splice(MAX_HISTORY_ITEMS);
+        }
+
+        // 保存
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+    } catch (error) {
+        console.error('保存浏览历史失败:', error);
+    }
+}
+
+/**
+ * 删除单条历史记录
+ * @param {string} id - 历史记录ID
+ * @returns {boolean} 是否删除成功
+ */
+function deleteHistoryItem(id) {
+    try {
+        const history = getHistoryList();
+        const newHistory = history.filter(item => item.id !== id);
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(newHistory));
+        return true;
+    } catch (error) {
+        console.error('删除历史记录失败:', error);
+        return false;
+    }
+}
+
+/**
+ * 清空所有历史记录
+ */
+function clearHistory() {
+    try {
+        localStorage.removeItem(HISTORY_STORAGE_KEY);
+    } catch (error) {
+        console.error('清空历史记录失败:', error);
+    }
+}
+
+/**
+ * 渲染历史列表
+ */
+function renderHistoryList() {
+    const historyList = document.getElementById('history-list');
+    const history = getHistoryList();
+
+    if (history.length === 0) {
+        historyList.innerHTML = '<li class="loading-list">暂无浏览历史</li>';
+        return;
+    }
+
+    const platformMap = {
+        'networkhot': '全网',
+        'toutiao': '头条',
+        'douyin': '抖音',
+        'weibo': '微博'
+    };
+
+    historyList.innerHTML = '';
+    history.forEach((item, index) => {
+        const li = document.createElement('li');
+        li.className = 'hot-item history-item';
+        li.dataset.id = index + 1;
+        li.dataset.historyId = item.id;
+
+        const date = new Date(item.browseTime);
+        const timeStr = date.toLocaleString('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        const platformName = platformMap[item.platform] || item.platform;
+
+        const rankSpan = document.createElement('span');
+        rankSpan.className = 'hot-rank';
+        rankSpan.textContent = index + 1;
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'hot-info';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'hot-title';
+        titleSpan.textContent = item.title;
+        titleSpan.title = item.title;
+
+        const heatSpan = document.createElement('span');
+        heatSpan.className = 'hot-heat';
+
+        const timeText = document.createElement('span');
+        timeText.className = 'history-time';
+        timeText.textContent = `${timeStr} · ${platformName}`;
+
+        heatSpan.appendChild(timeText);
+        heatSpan.appendChild(document.createTextNode(item.heat));
+
+        infoDiv.appendChild(titleSpan);
+        infoDiv.appendChild(heatSpan);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'history-delete-btn';
+        deleteBtn.title = '删除';
+        deleteBtn.textContent = '✕';
+
+        li.appendChild(rankSpan);
+        li.appendChild(infoDiv);
+        li.appendChild(deleteBtn);
+
+        // 绑定删除按钮事件
+        deleteBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (confirm('确定删除这条历史记录吗？')) {
+                if (deleteHistoryItem(item.id)) {
+                    renderHistoryList();
+                }
+            }
+        });
+
+        // 绑定点击事件
+        li.addEventListener('click', function() {
+            showNewsContent({
+                id: index + 1,
+                title: item.title,
+                heat: item.heat,
+                content: item.content,
+                isHistory: true
+            });
+        });
+
+        historyList.appendChild(li);
+    });
+}
+
+// ==================== 内容缓存模块 ====================
+
+/**
+ * 从 localStorage 获取缓存的文章内容
+ * @param {string} title - 文章标题
+ * @returns {Object|null} 缓存数据或 null
+ */
+function getCachedContent(title) {
+    try {
+        const localCacheKey = `content-${title}`;
+        const localCache = localStorage.getItem(localCacheKey);
+        if (!localCache) return null;
+
+        const cachedData = JSON.parse(localCache);
+        const now = Date.now();
+
+        // 检查缓存是否过期
+        if (cachedData.expiry > now) {
+            return cachedData;
+        } else {
+            // 缓存已过期，删除
+            localStorage.removeItem(localCacheKey);
+            return null;
+        }
+    } catch (e) {
+        console.error('读取缓存出错:', e);
+        return null;
     }
 }
 
@@ -632,114 +813,6 @@ document.addEventListener('DOMContentLoaded', function () {
     `;
     document.head.appendChild(toastStyle);
 
-    function fetchHistory() {
-        const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
-
-        currentPlatform = 'history';
-        targetNewsId = null;
-
-        document.querySelectorAll('.platform-tab').forEach(tab => {
-            tab.classList.toggle('active', tab.dataset.platform === 'history');
-        });
-
-        const hotNewsList = document.getElementById('hot-news-list');
-        hotNewsList.innerHTML = '<div class="loading-list">加载历史记录中...</div>';
-
-        fetch(`${BASE_PATH}/api/hot-news/history`)
-            .then(response => response.json())
-            .then(data => {
-                if (Array.isArray(data) && data.length > 0) {
-                    renderHistoryList(data);
-                } else {
-                    hotNewsList.innerHTML = '<div class="loading-list">暂无浏览历史</div>';
-                }
-            })
-            .catch(error => {
-                console.error('获取历史记录失败:', error);
-                hotNewsList.innerHTML = '<div class="loading-list">加载历史记录失败</div>';
-            });
-    }
-
-    function renderHistoryList(historyData) {
-        const hotNewsList = document.getElementById('hot-news-list');
-        hotNewsList.innerHTML = '';
-
-        historyData.forEach((item, index) => {
-            const li = document.createElement('li');
-            li.className = 'hot-item';
-            li.dataset.id = index + 1;
-            li.dataset.historyId = item._id;
-
-            const rankClass = index < 3 ? ` top${index + 1}` : '';
-
-            const date = new Date(item.snapshotTime);
-            const timeStr = date.toLocaleString('zh-CN', {
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-
-            const platformMap = {
-                'networkhot': '全网',
-                'toutiao': '头条',
-                'douyin': '抖音'
-            };
-            const platformName = platformMap[item.platform] || item.platform;
-
-            li.innerHTML = `
-                <span class="hot-rank${rankClass}">${index + 1}</span>
-                <span class="hot-title" title="${item.title}">${item.title}</span>
-                <span class="hot-heat" title="平台: ${platformName} | 浏览时间: ${timeStr}">${item.heat}</span>
-                <button class="history-delete-btn" aria-label="删除">✕</button>
-            `;
-
-            li.addEventListener('click', function(e) {
-                if (!e.target.closest('.history-delete-btn')) {
-                    document.querySelectorAll('.hot-item').forEach(item => {
-                        item.classList.remove('active');
-                    });
-                    this.classList.add('active');
-
-                    showNewsContent({
-                        id: index + 1,
-                        title: item.title,
-                        heat: item.heat
-                    });
-                }
-            });
-
-            const deleteBtn = li.querySelector('.history-delete-btn');
-            deleteBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                deleteHistoryItem(item._id, li);
-            });
-
-            hotNewsList.appendChild(li);
-        });
-    }
-
-    function deleteHistoryItem(id, itemElement) {
-        const BASE_PATH = window.location.pathname.startsWith('/hot-news') ? '/hot-news' : '';
-
-        if (confirm('确定删除这条历史记录吗?')) {
-            fetch(`${BASE_PATH}/api/hot-news/history/${id}`, {
-                method: 'DELETE'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    itemElement.remove();
-                    showToast('已删除历史记录');
-                }
-            })
-            .catch(error => {
-                console.error('删除失败:', error);
-                showToast('删除失败');
-            });
-        }
-    }
-
     function showToast(message) {
         let toast = document.querySelector('.toast-notification');
         if (!toast) {
@@ -778,18 +851,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     if (targetNewsId) {
                         setTimeout(() => {
-                            selectNewsByIndex(parseInt(targetNewsId));
+                            selectAndSaveHistory(parseInt(targetNewsId));
                         }, 300);
                     } else {
                         setTimeout(() => {
-                            selectNewsByIndex(1);
+                            previewNews(1);
                         }, 300);
                     }
                 } else {
                     console.error('获取热搜失败:', data.msg || data.error);
                     renderHotNewsList(getFallbackData(platform));
                     setTimeout(() => {
-                        selectNewsByIndex(1);
+                        previewNews(1);
                     }, 300);
                 }
             })
@@ -802,8 +875,31 @@ document.addEventListener('DOMContentLoaded', function () {
             });
     }
 
-    // 根据索引选择热搜
-    function selectNewsByIndex(index) {
+    // 预览新闻（仅选中显示，不保存到历史）
+    function previewNews(index) {
+        const hotItem = document.querySelector(`.hot-item[data-id="${index}"]`);
+        if (hotItem) {
+            // 更新UI状态
+            document.querySelectorAll('.hot-item').forEach(item => item.classList.remove('active'));
+            hotItem.classList.add('active');
+
+            const title = hotItem.querySelector('.hot-title')?.textContent || '';
+            const heat = hotItem.querySelector('.hot-heat')?.textContent || '';
+
+            // 显示内容，但不保存到历史
+            showNewsContent({
+                id: index,
+                title: title,
+                heat: heat
+            });
+
+            hotItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            console.log(`已预览第 ${index} 个热搜`);
+        }
+    }
+
+    // 选中并保存到历史
+    function selectAndSaveHistory(index) {
         const hotItem = document.querySelector(`.hot-item[data-id="${index}"]`);
         if (hotItem) {
             // 模拟点击该热搜项
@@ -954,15 +1050,12 @@ document.addEventListener('DOMContentLoaded', function () {
                      heat: heat
                  });
 
-                 // 保存到浏览历史（排除历史 Tab）
-                 if (currentPlatform !== 'history') {
-                     saveToHistory({
-                         id: index + 1,
-                         title: title,
-                         heat: heat,
-                         platform: currentPlatform
-                     });
-                 }
+                 // TODO: 优化：延迟到内容生成完毕后再保存到历史记录
+                 // saveToHistory({
+                 //     title: title,
+                 //     heat: heat,
+                 //     platform: currentPlatform
+                 // });
             });
 
             // 注意：移动端toggle按钮的事件处理已通过事件委托在hotNewsList上统一处理
@@ -1019,15 +1112,31 @@ document.addEventListener('DOMContentLoaded', function () {
     // 初始化平台标签点击事件
     function initPlatformTabs() {
         const platformTabs = document.querySelectorAll('.platform-tab');
+        const hotNewsList = document.getElementById('hot-news-list');
+        const historyList = document.getElementById('history-list');
+
         platformTabs.forEach(tab => {
             tab.addEventListener('click', function () {
                 const platform = this.dataset.platform;
 
+                // 更新 Tab 激活状态
+                platformTabs.forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+
                 if (platform === 'history') {
-                    fetchHistory();
+                    // 历史 Tab：显示历史列表，隐藏热搜列表
+                    historyList.style.display = 'block';
+                    hotNewsList.style.display = 'none';
+                    renderHistoryList();
                 } else {
+                    // 热搜平台：显示热搜列表，隐藏历史列表
+                    hotNewsList.style.display = 'block';
+                    historyList.style.display = 'none';
                     fetchHotNews(platform);
                 }
+
+                // 更新当前平台
+                currentPlatform = platform;
 
                 trackEvent('平台切换', {
                     platform: platform,
@@ -1092,74 +1201,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const aiContent = newsContent.querySelector('.ai-content');
         const hotItem = document.querySelector(`.hot-item[data-id="${newsId}"]`);
         const heat = hotItem ? hotItem.querySelector('.hot-heat').textContent : '热度未知';
-
-        // 检查本地存储中是否有缓存
-        const localCacheKey = `content-${title}`;
-        const localCache = localStorage.getItem(localCacheKey);
-
-        if (localCache) {
-            try {
-                const cachedData = JSON.parse(localCache);
-                const now = Date.now();
-
-                // 检查缓存是否过期
-                if (cachedData.expiry > now) {
-                    console.log(`从本地缓存获取内容: ${title}`);
-
-                    // 显示缓存的内容
-                    loadingElement.style.display = 'none';
-                    aiContent.style.display = 'block';
-
-                    // 如果有缓存的参考来源信息，先显示
-                    if (cachedData.articles && cachedData.articles.length > 0) {
-                        const sourcesContainer = newsContent.querySelector('.article-sources');
-                        if (!sourcesContainer) {
-                            const sourcesDiv = document.createElement('div');
-                            sourcesDiv.className = 'article-sources';
-                            sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
-                            contentContainer.parentNode.insertBefore(sourcesDiv, contentContainer);
-                        }
-
-                        const linksContainer = newsContent.querySelector('.sources-links');
-                        if (linksContainer) {
-                            linksContainer.innerHTML = '';
-                            cachedData.articles.forEach((article, index) => {
-                                const linkElement = document.createElement('a');
-                                linkElement.href = article.link;
-                                linkElement.target = '_blank';
-                                linkElement.rel = 'noopener noreferrer';
-                                linkElement.className = 'source-link';
-                                linkElement.textContent = `${index + 1}. ${article.title}`;
-                                linksContainer.appendChild(linkElement);
-                            });
-                        }
-                    }
-
-                    // 直接使用缓存的 HTML（如果存在），否则格式化 content 字段（向后兼容）
-                    if (cachedData.html) {
-                        contentContainer.innerHTML = cachedData.html;
-                    } else if (cachedData.content) {
-                        contentContainer.innerHTML = formatContent(cachedData.content);
-                    }
-
-                    // 生成图片
-                    if (!imageContainer.innerHTML.trim()) {
-                        createSVGImage(newsId, title, heat);
-                        setTimeout(() => {
-                            generateImageForContent(newsId, title, cachedData.content, heat);
-                        }, 500);
-                    }
-
-                    return;
-                } else {
-                    // 缓存已过期，删除
-                    localStorage.removeItem(localCacheKey);
-                }
-            } catch (e) {
-                console.error('解析本地缓存出错:', e);
-                localStorage.removeItem(localCacheKey);
-            }
-        }
 
         // 显示加载状态
         loadingElement.style.display = 'flex';
@@ -1254,8 +1295,21 @@ document.addEventListener('DOMContentLoaded', function () {
                                     articles: cachedArticles,
                                     expiry: Date.now() + (10 * 60 * 1000)
                                 };
+                                const localCacheKey = `content-${title}`;
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                                 console.log(`内容已保存到本地缓存: ${title}`);
+
+                                // 保存到浏览历史（内容生成完毕后保存，包含完整 content）
+                                saveToHistory({
+                                    title: title,
+                                    heat: heat,
+                                    platform: currentPlatform,
+                                    content: {
+                                        html: formattedHtml,
+                                        articles: cachedArticles
+                                    }
+                                });
+                                console.log(`已保存到历史记录`);
                             } catch (e) {
                                 console.error('保存到本地缓存失败:', e);
                             }
@@ -1395,6 +1449,60 @@ document.addEventListener('DOMContentLoaded', function () {
                 // 保留SVG图片作为备用
                 createSVGImage(newsId, title, heat);
             });
+    }
+
+    // 渲染缓存的文章内容
+    function renderCachedContent(newsContent, newsId, cachedData, title, heat) {
+        const contentContainer = newsContent.querySelector('.text-content');
+        const imageContainer = newsContent.querySelector('.image-container');
+        const loadingElement = newsContent.querySelector('.loading');
+        const aiContent = newsContent.querySelector('.ai-content');
+
+        console.log(`从本地缓存获取内容: ${title}`);
+
+        // 显示缓存的内容
+        loadingElement.style.display = 'none';
+        aiContent.style.display = 'block';
+
+        // 渲染参考来源
+        if (cachedData.articles && cachedData.articles.length > 0) {
+            let sourcesContainer = newsContent.querySelector('.article-sources');
+            if (!sourcesContainer) {
+                sourcesContainer = document.createElement('div');
+                sourcesContainer.className = 'article-sources';
+                sourcesContainer.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
+                contentContainer.parentNode.insertBefore(sourcesContainer, contentContainer);
+            }
+
+            const linksContainer = newsContent.querySelector('.sources-links');
+            if (linksContainer) {
+                linksContainer.innerHTML = '';
+                cachedData.articles.forEach((article, index) => {
+                    const linkElement = document.createElement('a');
+                    linkElement.href = article.link;
+                    linkElement.target = '_blank';
+                    linkElement.rel = 'noopener noreferrer';
+                    linkElement.className = 'source-link';
+                    linkElement.textContent = `${index + 1}. ${article.title}`;
+                    linksContainer.appendChild(linkElement);
+                });
+            }
+        }
+
+        // 渲染文章内容
+        if (cachedData.html) {
+            contentContainer.innerHTML = cachedData.html;
+        } else if (cachedData.content) {
+            contentContainer.innerHTML = formatContent(cachedData.content);
+        }
+
+        // 生成图片
+        if (!imageContainer.innerHTML.trim()) {
+            createSVGImage(newsId, title, heat);
+            setTimeout(() => {
+                generateImageForContent(newsId, title, cachedData.content, heat);
+            }, 500);
+        }
     }
 
     // 创建SVG图片（作为占位符）
@@ -1593,6 +1701,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // 显示新闻内容 - 同时处理PC和移动端
+    // 支持传入 content 缓存以快速显示
     function showNewsContent(news) {
         if (!news || !news.id || !news.title) {
             console.error('无效的新闻数据:', news);
@@ -1679,19 +1788,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // 检查是否已经生成过内容
             const textContent = newsContent.querySelector('.text-content');
-            if (textContent && !textContent.innerHTML.trim()) {
-                // 如果没有内容，则生成
-                generateAIContent(news.id, news.title);
+
+            // 历史记录点击：只用历史记录的 content（没有就直接 API）
+            // 普通点击：优先 localStorage 缓存（有过期时间）
+            if (news.isHistory) {
+                if (news.content) {
+                    renderCachedContent(newsContent, news.id, news.content, news.title, news.heat);
+                } else {
+                    generateAIContent(news.id, news.title);
+                }
             } else {
-                const imageContainer = newsContent.querySelector('.image-container');
-                if (imageContainer && !imageContainer.innerHTML.trim()) {
-                    // 如果有内容但没有图片，生成图片
-                    createSVGImage(news.id, news.title, news.heat);
+                const cachedData = getCachedContent(news.title);
+                if (cachedData) {
+                    renderCachedContent(newsContent, news.id,cachedData, news.title, news.heat);
+                } else if (textContent && !textContent.innerHTML.trim()) {
+                    generateAIContent(news.id, news.title);
                 }
             }
         }
         // 移除这里的 initShareButtons() 调用，因为已经在 DOMContentLoaded 中初始化了
     }
+
+    // 挂载到 window 以便历史模块调用
+    window.showNewsContent = showNewsContent;
 
     // 创建移动端内容区域
     function createMobileContent(newsId, title, heat, listItem) {
