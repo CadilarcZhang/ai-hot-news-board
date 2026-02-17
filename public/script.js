@@ -1186,8 +1186,38 @@ document.addEventListener('DOMContentLoaded', function () {
         document.head.appendChild(style);
     }
 
+    // 初始化移动端抽屉展开/收起按钮事件
+    function initMobileToggle() {
+        const hotNewsList = document.getElementById('hot-news-list');
+        if (!hotNewsList) return;
+
+        hotNewsList.addEventListener('click', function(e) {
+            const toggleBtn = e.target.closest('.toggle-btn');
+            if (!toggleBtn) return;
+
+            const hotItem = toggleBtn.closest('.hot-item');
+            if (!hotItem) return;
+
+            const newsId = hotItem.dataset.id;
+            if (!newsId) return;
+
+            // 检查是否已存在 mobile-content，不存在则创建
+            let mobileContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
+            if (!mobileContent) {
+                // 获取标题和热度
+                const title = hotItem.querySelector('.hot-title')?.textContent || '';
+                const heat = hotItem.querySelector('.hot-heat')?.textContent || '热度未知';
+                // 创建移动端内容
+                mobileContent = createMobileContent(newsId, title, heat, hotItem);
+            }
+
+            hotItem.classList.toggle('expanded');
+        });
+    }
+
     // 初始化
     initPlatformTabs();
+    initMobileToggle();
 
     // 根据URL路径加载对应平台的热搜数据
     fetchHotNews(currentPlatform);
