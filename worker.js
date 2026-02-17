@@ -1,3 +1,10 @@
+/**
+ * [遗留代码 / Legacy Code]
+ * 本文件用于 Redis + Bull 队列处理 AI 内容生成，但目前未被主程序引用。
+ * 当前架构使用 SSE 流式输出直接调用 SiliconFlow API，无需队列。
+ * 保留此文件以备未来需要异步队列处理时使用。
+ */
+
 require('dotenv').config();
 
 const Queue = require('bull');
@@ -6,7 +13,7 @@ const axios = require('axios');
 // AI API密钥
 const AI_API_KEY = process.env.AI_API_KEY;
 
-// 创建内容生成队列
+// 创建内容生成队列（当前未使用）
 const contentQueue = new Queue('content-generation');
 
 // 处理内容生成任务
