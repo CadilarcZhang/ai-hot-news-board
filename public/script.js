@@ -1201,6 +1201,13 @@ document.addEventListener('DOMContentLoaded', function () {
             const newsId = hotItem.dataset.id;
             if (!newsId) return;
 
+            // 收起其他已展开的项目（手风琴效果）
+            document.querySelectorAll('.hot-item.expanded').forEach(item => {
+                if (item !== hotItem) {
+                    item.classList.remove('expanded');
+                }
+            });
+
             // 检查是否已存在 mobile-content，不存在则创建
             let mobileContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
             if (!mobileContent) {
@@ -1858,7 +1865,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // [方案A] 使用display:none保留DOM状态（当前方案）
         const existingContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
         if (existingContent) {
-            existingContent.style.display = 'block';
+            // 不强制设置 display，让 .expanded 类控制显示/隐藏
             return existingContent;
         }
 
