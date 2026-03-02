@@ -6,6 +6,7 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const cheerio = require('cheerio');
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -13,6 +14,97 @@ const PORT = process.env.PORT || 3001;
 // 如果 BASE_PATH 为空字符串，则使用 '/' 作为静态文件路径
 const BASE_PATH = process.env.BASE_PATH !== undefined ? process.env.BASE_PATH : '/hot-news';
 const STATIC_PATH = BASE_PATH || '/';
+const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || '';
+
+function parseBooleanEnv(value, defaultValue = false) {
+    if (value === undefined || value === null || value === '') {
+        return defaultValue;
+    }
+
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
+function parseCsvEnv(value, fallback = []) {
+    if (!value || typeof value !== 'string') {
+        return fallback;
+    }
+
+    const items = value.split(',').map((item) => item.trim()).filter(Boolean);
+    return items.length > 0 ? items : fallback;
+}
+
+const ADMIN_CORS_ORIGINS = parseCsvEnv(process.env.ADMIN_CORS_ORIGINS, [
+    'http://localhost:3001',
+    'http://127.0.0.1:3001'
+]);
+
+function isAllowedAdminOrigin(origin) {
+    if (!origin) {
+        return true;
+    }
+
+    return ADMIN_CORS_ORIGINS.includes(origin);
+}
+
+function requireAdminOrigin(req, res, next) {
+    const origin = req.get('origin');
+    if (!isAllowedAdminOrigin(origin)) {
+        return res.status(403).json({ error: '来源未授权' });
+    }
+
+    next();
+}
+
+function safeTokenEqual(left, right) {
+    if (!left || !right) {
+        return false;
+    }
+
+    const leftBuffer = Buffer.from(left, 'utf8');
+    const rightBuffer = Buffer.from(right, 'utf8');
+    if (leftBuffer.length !== rightBuffer.length) {
+        return false;
+    }
+
+    return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireAdminAuth(req, res, next) {
+    const origin = req.get('origin');
+    if (!isAllowedAdminOrigin(origin)) {
+        return res.status(403).json({ error: '来源未授权' });
+    }
+
+    if (!ADMIN_API_TOKEN) {
+        console.error('ADMIN_API_TOKEN 未配置，管理接口已禁用');
+        return res.status(503).json({ error: '管理接口未配置' });
+    }
+
+    const authHeader = req.get('authorization') || '';
+    if (!authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: '缺少管理员认证信息' });
+    }
+
+    const token = authHeader.slice(7).trim();
+    if (!safeTokenEqual(token, ADMIN_API_TOKEN)) {
+        return res.status(403).json({ error: '管理员认证失败' });
+    }
+
+    next();
+}
+
+const adminCors = cors({
+    origin(origin, callback) {
+        return callback(null, isAllowedAdminOrigin(origin));
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type']
+});
 
 // 增强缓存对象，添加更多功能
 const enhancedCache = {
@@ -730,7 +822,10 @@ async function searchNews(query) {
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
+        const GOOGLE_SEARCH_SWITCH = parseBooleanEnv(
+            process.env.GOOGLE_SEARCH_SWITCH,
+            parseBooleanEnv(config.GOOGLE_SEARCH_SWITCH, false)
+        );
         
         if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
             try {
@@ -1363,7 +1458,11 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     try {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
+        const config = require('./config/index.js');
+        const GOOGLE_SEARCH_SWITCH = parseBooleanEnv(
+            process.env.GOOGLE_SEARCH_SWITCH,
+            parseBooleanEnv(config.GOOGLE_SEARCH_SWITCH, false)
+        );
         // 步骤2: 搜索并抓取文章内容
         articlesData = GOOGLE_SEARCH_SWITCH ? await fetchMultipleArticlesWithRetry(title) : await fetchMultipleArticles(title);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
@@ -1621,7 +1720,18 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
 });
 
 // 处理OPTIONS预检请求
-app.options(`${BASE_PATH || ''}/api/*`, cors());
+app.options(`${BASE_PATH || ''}/api/*`, (req, res, next) => {
+    const isAdminEndpoint = req.path === `${BASE_PATH}/api/cache-stats` ||
+        req.path === `${BASE_PATH}/api/cache-warmup`;
+
+    if (isAdminEndpoint) {
+        return requireAdminOrigin(req, res, () =>
+            adminCors(req, res, () => res.sendStatus(204))
+        );
+    }
+
+    return cors()(req, res, next);
+});
 
 // 处理 favicon.ico 请求（浏览器默认会请求这个）
 // 如果存在 favicon.ico 就提供，否则提供 favicon.svg
@@ -1708,24 +1818,12 @@ setInterval(() => {
 }, 3600000); // 每小时清理一次
 
 // 添加缓存统计接口（仅供内部使用）
-app.get(`${BASE_PATH}/api/cache-stats`, (req, res) => {
-    // 简单的API密钥验证，实际应用中应使用更安全的方法
-    const apiKey = req.query.key;
-    if (apiKey !== 'admin-secret-key') {
-        return res.status(403).json({ error: '未授权访问' });
-    }
-    
+app.get(`${BASE_PATH}/api/cache-stats`, requireAdminOrigin, requireAdminAuth, (req, res) => {
     res.json(simpleCache.getStats());
 });
 
 // 添加提示词缓存预热功能
-app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
-    // 简单的API密钥验证
-    const apiKey = req.query.key;
-    if (apiKey !== 'admin-secret-key') {
-        return res.status(403).json({ error: '未授权访问' });
-    }
-    
+app.post(`${BASE_PATH}/api/cache-warmup`, requireAdminOrigin, requireAdminAuth, async (req, res) => {
     const { titles } = req.body;
     
     if (!titles || !Array.isArray(titles) || titles.length === 0) {

@@ -60,8 +60,8 @@ git push
 
    | 变量名 | 值 | 说明 |
    |--------|-----|------|
-   | `TIANAPI_KEY` | `eb50731204ecb974aa2fcc8f22478f42` | 天行 API 密钥（或你自己的密钥） |
-   | `AI_API_KEY` | `sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo` | AI API 密钥（或你自己的密钥） |
+   | `TIANAPI_KEY` | `YOUR_TIANAPI_KEY` | 天行 API 密钥（请替换为你自己的） |
+   | `AI_API_KEY` | `YOUR_SILICONFLOW_API_KEY` | AI API 密钥（请替换为你自己的） |
    | `BASE_PATH` | （留空） | 基础路径，在 Vercel 上使用根路径 |
    | `NODE_ENV` | `production` | 生产环境标识 |
 
@@ -124,10 +124,10 @@ CLI 会问你几个问题：
 ```bash
 # 设置环境变量
 vercel env add TIANAPI_KEY
-# 输入值：eb50731204ecb974aa2fcc8f22478f42（或你自己的密钥）
+# 输入值：YOUR_TIANAPI_KEY
 
 vercel env add AI_API_KEY
-# 输入值：sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo（或你自己的密钥）
+# 输入值：YOUR_SILICONFLOW_API_KEY
 
 vercel env add BASE_PATH
 # 输入值：（留空，直接回车）
@@ -223,4 +223,3 @@ vercel --prod
 - 在 Vercel 社区寻求帮助
 
 祝你部署顺利！🚀
-
