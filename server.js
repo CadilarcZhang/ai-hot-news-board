@@ -1800,22 +1800,43 @@ if (BASE_PATH && BASE_PATH !== '/') {
     });
 }
 
-// 启动服务器
-app.listen(PORT, () => {
-    console.log(`服务器运行在 http://localhost:${PORT}`);
-    console.log(`应用访问地址: http://localhost:${PORT}${BASE_PATH}`);
-});
+let cleanupTimer = null;
+let serverInstance = null;
+
+function startBackgroundTasks() {
+    if (cleanupTimer) {
+        return;
+    }
+
+    cleanupTimer = setInterval(() => {
+        const cleaned = simpleCache.cleanup();
+        if (cleaned > 0) {
+            console.log(`缓存清理完成，移除了 ${cleaned} 个过期项目`);
+        }
+    }, 3600000); // 每小时清理一次
+}
+
+function startServer(port = PORT) {
+    if (serverInstance) {
+        return serverInstance;
+    }
+
+    startBackgroundTasks();
+    serverInstance = app.listen(port, () => {
+        console.log(`服务器运行在 http://localhost:${port}`);
+        console.log(`应用访问地址: http://localhost:${port}${BASE_PATH}`);
+    });
+
+    return serverInstance;
+}
+
+if (require.main === module) {
+    startServer();
+}
 
 // 确保在最后导出app以供Vercel使用
 module.exports = app;
-
-// 添加缓存清理定时任务
-setInterval(() => {
-    const cleaned = simpleCache.cleanup();
-    if (cleaned > 0) {
-        console.log(`缓存清理完成，移除了 ${cleaned} 个过期项目`);
-    }
-}, 3600000); // 每小时清理一次
+module.exports.startServer = startServer;
 
 // 添加缓存统计接口（仅供内部使用）
 app.get(`${BASE_PATH}/api/cache-stats`, requireAdminOrigin, requireAdminAuth, (req, res) => {

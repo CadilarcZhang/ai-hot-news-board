@@ -181,6 +181,8 @@ npm run local      # 本地开发 (BASE_PATH=/hot-news)
 npm start          # 生产启动
 npm run build      # 构建
 npm run deploy     # 部署
+npm run smoke      # 本地运行时冒烟测试
+npm run smoke:dist # dist 构建产物冒烟测试
 ```
 
 ## 技术亮点
