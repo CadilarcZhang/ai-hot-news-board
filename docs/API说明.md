@@ -3,7 +3,7 @@
 查询抖音App热门搜索榜单列表
 
 接口地址：https://apis.tianapi.com/douyinhot/index 
-请求示例：https://apis.tianapi.com/douyinhot/index?key=eb50731204ecb974aa2fcc8f22478f42
+请求示例：https://apis.tianapi.com/douyinhot/index?key=YOUR_TIANAPI_KEY
 支持协议：http/https
 请求方式：get/post
 返回格式：utf-8 json
@@ -121,7 +121,7 @@ word	string	赵丽颖张慧雯斗舞	热点话题
 大模型对话生成API：
 curl --request POST \
   --url https://api.siliconflow.cn/v1/chat/completions \
-  --header 'Authorization: Bearer sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo' \
+  --header 'Authorization: Bearer YOUR_SILICONFLOW_API_KEY' \
   --header 'Content-Type: application/json' \
   --data '{
   "model": "Qwen/QwQ-32B",

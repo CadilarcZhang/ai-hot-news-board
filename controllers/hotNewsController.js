@@ -1,7 +1,7 @@
 const axios = require('axios');
 const cache = require('../utils/cache');
 
-const TIANAPI_KEY = process.env.TIANAPI_KEY || 'eb50731204ecb974aa2fcc8f22478f42';
+const TIANAPI_KEY = process.env.TIANAPI_KEY;
 
 exports.getHotNews = async (req, res, next) => {
     try {
@@ -24,6 +24,9 @@ exports.getHotNews = async (req, res, next) => {
         };
         
         const endpoint = endpoints[platform] || 'weibohot';
+        if (!TIANAPI_KEY) {
+            return res.status(500).json({ error: 'TIANAPI_KEY 未配置' });
+        }
         const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
         
         const response = await axios.get(apiUrl);

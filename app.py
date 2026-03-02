@@ -2,13 +2,14 @@ from flask import Flask, request, Response, jsonify, stream_with_context
 import requests
 import json
 import time
+import os
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)  # 启用跨域支持
 
-# AI API密钥
-AI_API_KEY = 'sk-pxmeadiyndbhhtvzvblpgnmyalwvhvvkikllrfjmkqzwtnvo'
+# 仅从环境变量读取密钥，避免硬编码泄露
+AI_API_KEY = os.getenv('AI_API_KEY', '')
 
 @app.route('/api/generate', methods=['GET'])
 def generate_content_sse():
@@ -16,6 +17,8 @@ def generate_content_sse():
     
     if not title:
         return jsonify({"error": "标题不能为空"}), 400
+    if not AI_API_KEY:
+        return jsonify({"error": "AI_API_KEY 未配置"}), 500
     
     def generate():
         # 发送请求到AI API
@@ -81,7 +84,10 @@ def generate_content_sse():
 @app.route('/api/hot-news', methods=['GET'])
 def get_hot_news():
     platform = request.args.get('platform', 'weibo')
-    api_key = 'eb50731204ecb974aa2fcc8f22478f42'  # 天行API密钥
+    api_key = os.getenv('TIANAPI_KEY', '')
+
+    if not api_key:
+        return jsonify({"error": "TIANAPI_KEY 未配置"}), 500
     
     # 根据平台选择不同的API接口
     api_endpoints = {

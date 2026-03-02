@@ -168,6 +168,9 @@ ai-hot-news-board/
 | `AI_API_KEY` | SiliconFlow API 密钥 |
 | `GOOGLE_SEARCH_API_KEY` | Google 搜索 API 密钥 |
 | `GOOGLE_SEARCH_ENGINE_ID` | Google 搜索引擎 ID |
+| `GOOGLE_SEARCH_SWITCH` | 是否启用 Google 搜索（`true/false`） |
+| `ADMIN_API_TOKEN` | 管理接口 Bearer Token（用于缓存统计与预热） |
+| `ADMIN_CORS_ORIGINS` | 管理接口允许的来源（逗号分隔） |
 | `BASE_PATH` | 基础路径（Vercel 为空） |
 
 ## 开发命令
@@ -249,6 +252,11 @@ AI_API_KEY=your_siliconflow_key
 # 搜索 API（可选）
 GOOGLE_SEARCH_API_KEY=your_google_key
 GOOGLE_SEARCH_ENGINE_ID=your_engine_id
+GOOGLE_SEARCH_SWITCH=false
+
+# 管理接口安全配置（必需）
+ADMIN_API_TOKEN=replace_with_a_strong_random_token
+ADMIN_CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001
 ```
 
 ## API 接口文档
@@ -287,6 +295,7 @@ Content-Type: application/json
 ```
 GET /api/cache-stats
 ```
+需要在请求头中携带：`Authorization: Bearer <ADMIN_API_TOKEN>`。
 
 ## 缓存策略
 
@@ -342,4 +351,3 @@ npm run deploy
 ## 许可证
 
 MIT License
-
