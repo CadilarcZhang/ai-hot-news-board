@@ -203,7 +203,8 @@ app.get(`${BASE_PATH}/test`, (req, res) => {
 const TIANAPI_KEY = process.env.TIANAPI_KEY;
 
 // AI API密钥
-const AI_API_KEY = process.env.AI_API_KEY;
+const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
 
 // 省份名称中英文映射表
 const provinceNameMap = {
@@ -546,13 +547,14 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         // 创建AI API请求
         const response = await axios({
             method: 'post',
-            url: 'https://api.siliconflow.cn/v1/chat/completions',
+            // SiliconFlow: url: 'https://api.siliconflow.cn/v1/chat/completions', Authorization: AI_API_KEY, model: 'deepseek-ai/DeepSeek-V3.2-Exp'
+            url: 'https://api.deepseek.com/chat/completions',
             headers: {
-                'Authorization': `Bearer ${AI_API_KEY}`,
+                'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+                "model": "deepseek-v4-flash",
                 "messages": [
                     {
                         "role": "system",
@@ -564,10 +566,9 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                     }
                 ],
                 "stream": true,
-                // 不限制token数量，确保内容完整
-                "temperature": 0.7, // 降低温度，使生成更确定性
+                "temperature": 0.7,
                 "top_p": 0.95,
-                "enable_thinking": false,
+                "thinking": { "type": "disabled" },
                 "response_format": {
                     "type": "text"
                 }
@@ -1407,13 +1408,14 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         // 创建AI API请求
         const response = await axios({
             method: 'post',
-            url: 'https://api.siliconflow.cn/v1/chat/completions',
+            // SiliconFlow: url: 'https://api.siliconflow.cn/v1/chat/completions', Authorization: AI_API_KEY, model: 'deepseek-ai/DeepSeek-V3.2-Exp'
+            url: 'https://api.deepseek.com/chat/completions',
             headers: {
-                'Authorization': `Bearer ${AI_API_KEY}`,
+                'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+                "model": "deepseek-v4-flash",
                 // "model": "Pro/zai-org/GLM-4.7",
                 "messages": [
                     {
@@ -1428,7 +1430,8 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 "stream": true,
                 "temperature": 0.7,
                 "top_p": 0.95,
-                "enable_thinking": false,
+                "thinking": { "type": "enabled" },
+                "reasoning_effort": "high",
                 "response_format": {
                     "type": "text"
                 }
@@ -1767,13 +1770,14 @@ app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
                 // 调用AI API生成内容
                 const response = await axios({
                     method: 'post',
-                    url: 'https://api.siliconflow.cn/v1/chat/completions',
+                    // SiliconFlow: url: 'https://api.siliconflow.cn/v1/chat/completions', Authorization: AI_API_KEY, model: 'deepseek-ai/DeepSeek-V3.2-Exp'
+                    url: 'https://api.deepseek.com/chat/completions',
                     headers: {
-                        'Authorization': `Bearer ${AI_API_KEY}`,
+                        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
                     data: {
-                        "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+                        "model": "deepseek-v4-flash",
                         "messages": [
                             {
                                 "role": "system",
@@ -1786,7 +1790,7 @@ app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
                         ],
                         "temperature": 0.7,
                         "top_p": 0.95,
-                        "enable_thinking": false,
+                        "thinking": { "type": "disabled" },
                         "response_format": {
                             "type": "text"
                         }
