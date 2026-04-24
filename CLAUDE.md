@@ -71,6 +71,42 @@ npm run deploy
 - `BASE_PATH` - Base URL path (empty on Vercel, `/hot-news` for local)
 - `NODE_ENV` - Environment (development/production)
 
+## Git Workflow
+
+**分支管理规范：**
+
+- **main**: 生产分支，禁止直接推送
+- **feature/***: 功能分支，通过 PR 合并到 main
+- **refactor/***: 重构分支，通过 PR 合并到 main
+- **fix/***: 修复分支，通过 PR 合并到 main
+
+**开发流程：**
+
+```bash
+# 1. 创建 feature worktree（推荐）
+git worktree add ../ai-hot-news-refactor feature/xxx
+cd ../ai-hot-news-refactor
+
+# 2. 开发和提交
+git add .
+git commit -m "feat: xxx"
+git push origin feature/xxx
+
+# 3. 创建 PR（必须使用 PR 合并，禁止直接推送到 main）
+gh pr create --title "feat: xxx" --body "..." --base main --head feature/xxx
+
+# 4. PR 合并后清理
+git checkout main
+git branch -d feature/xxx
+```
+
+**⚠️ 重要约束：**
+
+- **禁止直接 `push` 到 `main` 分支**（包括 `git push origin feature/xxx:main`）
+- **所有改动必须通过 PR 合并**，经过 Code Review 后再合并
+- 使用 `git worktree` 进行并行开发，避免频繁切换分支
+- PR 合并后，feature 分支可以删除，worktree 可以继续用于新功能开发
+
 ## Key Implementation Details
 
 ### Browse History Module (`public/script.js`)

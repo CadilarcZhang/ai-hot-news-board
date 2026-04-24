@@ -1186,8 +1186,38 @@ document.addEventListener('DOMContentLoaded', function () {
         document.head.appendChild(style);
     }
 
+    // 初始化移动端抽屉展开/收起按钮事件
+    function initMobileToggle() {
+        const hotNewsList = document.getElementById('hot-news-list');
+        if (!hotNewsList) return;
+
+        hotNewsList.addEventListener('click', function(e) {
+            const toggleBtn = e.target.closest('.toggle-btn');
+            if (!toggleBtn) return;
+
+            const hotItem = toggleBtn.closest('.hot-item');
+            if (!hotItem) return;
+
+            const newsId = hotItem.dataset.id;
+            if (!newsId) return;
+
+            // 检查是否已存在 mobile-content，不存在则创建
+            let mobileContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
+            if (!mobileContent) {
+                // 获取标题和热度
+                const title = hotItem.querySelector('.hot-title')?.textContent || '';
+                const heat = hotItem.querySelector('.hot-heat')?.textContent || '热度未知';
+                // 创建移动端内容
+                mobileContent = createMobileContent(newsId, title, heat, hotItem);
+            }
+
+            hotItem.classList.toggle('expanded');
+        });
+    }
+
     // 初始化
     initPlatformTabs();
+    initMobileToggle();
 
     // 根据URL路径加载对应平台的热搜数据
     fetchHotNews(currentPlatform);
@@ -1711,24 +1741,33 @@ document.addEventListener('DOMContentLoaded', function () {
             // 移动端逻辑
             const listItem = document.querySelector(`.hot-item[data-id="${news.id}"]`);
             if (listItem) {
-                // 收起所有已展开的热搜项
+                // 收起所有已展开的热搜项（使用display:none保留DOM状态，避免重新生成）
                 document.querySelectorAll('.hot-item.expanded').forEach(item => {
                     if (item !== listItem) {
                         item.classList.remove('expanded');
-                        // 移除对应的移动端内容区域
-                        const mobileContent = item.nextElementSibling;
-                        if (mobileContent && mobileContent.classList.contains('mobile-content')) {
-                            mobileContent.remove();
-                        }
                     }
+                });
+                // 隐藏所有移动端内容区域（保留DOM和生成状态）
+                document.querySelectorAll('.mobile-content').forEach(content => {
+                    content.style.display = 'none';
                 });
                 // 展开当前项
                 listItem.classList.add('expanded');
 
-                // 检查是否已有对应的移动端内容
-                const existingContent = listItem.nextElementSibling;
-                if (!existingContent || !existingContent.classList.contains('mobile-content')) {
-                    // 创建移动端内容
+                // 检查是否已有对应的移动端内容（使用data-id精确定位）
+                let existingContent = document.querySelector(`[data-id="mobile-news-${news.id}"]`);
+                // 先检查本地缓存，有缓存直接渲染，不调用生成函数
+                const cachedData = getCachedContent(news.title);
+
+                if (existingContent && cachedData) {
+                    // 已有DOM且有缓存，直接渲染缓存内容并显示
+                    renderMobileCachedContent(news.id, existingContent, cachedData);
+                    existingContent.style.display = 'block';
+                } else if (existingContent && !cachedData) {
+                    // 已有DOM但无缓存（生成中），直接显示
+                    existingContent.style.display = 'block';
+                } else {
+                    // 无DOM，创建并生成
                     createMobileContent(news.id, news.title, news.heat, listItem);
                 }
             }
@@ -1816,11 +1855,18 @@ document.addEventListener('DOMContentLoaded', function () {
     function createMobileContent(newsId, title, heat, listItem) {
         console.log('创建移动端内容:', newsId, title);
 
-        // 移除可能已存在的内容
-        const existingContent = listItem.nextElementSibling;
-        if (existingContent && existingContent.classList.contains('mobile-content')) {
-            existingContent.remove();
+        // [方案A] 使用display:none保留DOM状态（当前方案）
+        const existingContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
+        if (existingContent) {
+            existingContent.style.display = 'block';
+            return existingContent;
         }
+
+        // [方案B] 使用remove删除DOM（如需切换方案，注释掉上面代码，取消下面注释）
+        // const existingContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);
+        // if (existingContent) {
+        //     existingContent.remove();
+        // }
 
         // 直接创建移动端内容元素，不依赖模板
         const mobileContent = document.createElement('div');
@@ -1850,6 +1896,57 @@ document.addEventListener('DOMContentLoaded', function () {
         return mobileContent;
     }
 
+    // 渲染移动端缓存内容（职责分离：渲染逻辑独立出来）
+    function renderMobileCachedContent(newsId, mobileContent, cachedData) {
+        const textContent = mobileContent.querySelector('.mobile-text-content');
+        const imageContainer = mobileContent.querySelector('.mobile-image-container');
+        const loading = mobileContent.querySelector('.mobile-loading');
+
+        if (!textContent || !imageContainer || !loading) {
+            console.error('移动端内容元素不完整');
+            return;
+        }
+
+        console.log(`从本地缓存渲染移动端内容`);
+        loading.style.display = 'none';
+
+        // 渲染参考来源
+        if (cachedData.articles && cachedData.articles.length > 0) {
+            let sourcesContainer = mobileContent.querySelector('.article-sources');
+            if (!sourcesContainer) {
+                sourcesContainer = document.createElement('div');
+                sourcesContainer.className = 'article-sources';
+                sourcesContainer.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
+                textContent.parentNode.insertBefore(sourcesContainer, textContent);
+            }
+
+            const linksContainer = sourcesContainer.querySelector('.sources-links');
+            if (linksContainer) {
+                linksContainer.innerHTML = '';
+                cachedData.articles.forEach((article, index) => {
+                    const linkElement = document.createElement('a');
+                    linkElement.href = article.link;
+                    linkElement.target = '_blank';
+                    linkElement.rel = 'noopener noreferrer';
+                    linkElement.className = 'source-link';
+                    linkElement.textContent = `${index + 1}. ${article.title}`;
+                    linksContainer.appendChild(linkElement);
+                });
+            }
+        }
+
+        // 渲染内容
+        if (cachedData.html) {
+            textContent.innerHTML = cachedData.html;
+        } else if (cachedData.content) {
+            textContent.innerHTML = formatContent(cachedData.content);
+        }
+
+        // 生成图片
+        const heat = mobileContent.closest('.hot-item')?.querySelector('.hot-heat')?.textContent || '';
+        generateMobileImage(newsId, cachedData.title || '', '', heat, imageContainer);
+    }
+
     // 为移动端生成AI内容
     function generateMobileContent(newsId, title, heat, mobileContent) {
         // 确保mobileContent存在
@@ -1873,70 +1970,10 @@ document.addEventListener('DOMContentLoaded', function () {
         loading.style.display = 'flex';
         textContent.innerHTML = '';
 
-        // 检查本地存储中是否有缓存
+        // 注意：缓存检查已前移到 showNewsContent，本函数只负责生成
+        // 如果调用本函数，说明需要走 SSE 生成流程
+
         const localCacheKey = `content-${title}`;
-        const localCache = localStorage.getItem(localCacheKey);
-
-        if (localCache) {
-            try {
-                const cachedData = JSON.parse(localCache);
-                const now = Date.now();
-
-                // 检查缓存是否过期
-                if (cachedData.expiry > now) {
-                    console.log(`从本地缓存获取内容: ${title}`);
-
-                    // 显示缓存的内容
-                    loading.style.display = 'none';
-
-                    // 如果有缓存的参考来源信息，先显示
-                    if (cachedData.articles && cachedData.articles.length > 0) {
-                        const sourcesContainer = mobileContent.querySelector('.article-sources');
-                        if (!sourcesContainer) {
-                            // 创建链接容器
-                            const sourcesDiv = document.createElement('div');
-                            sourcesDiv.className = 'article-sources';
-                            sourcesDiv.innerHTML = '<div class="sources-label">📰 参考来源：</div><div class="sources-links"></div>';
-                            // 插入到文本内容之前
-                            textContent.parentNode.insertBefore(sourcesDiv, textContent);
-                        }
-
-                        const linksContainer = mobileContent.querySelector('.sources-links');
-                        if (linksContainer) {
-                            linksContainer.innerHTML = '';
-                            cachedData.articles.forEach((article, index) => {
-                                const linkElement = document.createElement('a');
-                                linkElement.href = article.link;
-                                linkElement.target = '_blank';
-                                linkElement.rel = 'noopener noreferrer';
-                                linkElement.className = 'source-link';
-                                linkElement.textContent = `${index + 1}. ${article.title}`;
-                                linksContainer.appendChild(linkElement);
-                            });
-                        }
-                    }
-
-                    // 直接使用缓存的 HTML（如果存在），否则格式化 content 字段
-                    if (cachedData.html) {
-                        textContent.innerHTML = cachedData.html;
-                    } else if (cachedData.content) {
-                        textContent.innerHTML = formatContent(cachedData.content);
-                    }
-
-                    // 生成图片（传递完整的参数）
-                    generateMobileImage(newsId, title, '', heat, imageContainer);
-
-                    return;
-                } else {
-                    // 缓存已过期，删除
-                    localStorage.removeItem(localCacheKey);
-                }
-            } catch (e) {
-                console.error('解析本地缓存出错:', e);
-                localStorage.removeItem(localCacheKey);
-            }
-        }
-
         let fullContent = '';
         let cachedArticles = []; // 保存参考来源信息
 
@@ -2023,6 +2060,18 @@ document.addEventListener('DOMContentLoaded', function () {
                                 };
                                 localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
                                 console.log(`内容已保存到本地缓存: ${title}`);
+
+                                // 保存到浏览历史（内容生成完毕后保存，包含完整 content）
+                                saveToHistory({
+                                    title: title,
+                                    heat: heat,
+                                    platform: currentPlatform,
+                                    content: {
+                                        html: formattedHtml,
+                                        articles: cachedArticles
+                                    }
+                                });
+                                console.log(`移动端已保存到历史记录`);
                             } catch (e) {
                                 console.error('保存到本地缓存失败:', e);
                             }
