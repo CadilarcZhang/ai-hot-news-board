@@ -207,97 +207,76 @@ const TIANAPI_KEY = process.env.TIANAPI_KEY;
 const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
 
-// 页面展示的是服务器出口 IP 定位到的城市。香港的英文结果统一显示为「香港」。
+// 定位服务未给出中文时，只翻译常见英文城市/地区名；未命中则原样显示。
 const placeNameMap = {
-    'Hong Kong': '香港',
-    'Hongkong': '香港',
-    'Hong Kong SAR': '香港',
-    'Hong Kong Special Administrative Region': '香港',
-    'HK': '香港',
-    'Beijing': '北京',
-    'Shanghai': '上海',
-    'Tianjin': '天津',
-    'Chongqing': '重庆',
-    'Guangdong': '广东',
-    'Jiangsu': '江苏',
-    'Zhejiang': '浙江',
-    'Shandong': '山东',
-    'Henan': '河南',
-    'Sichuan': '四川',
-    'Hubei': '湖北',
-    'Hunan': '湖南',
-    'Anhui': '安徽',
-    'Fujian': '福建',
-    'Liaoning': '辽宁',
-    'Shaanxi': '陕西',
-    'Jiangxi': '江西',
-    'Hebei': '河北',
-    'Yunnan': '云南',
-    'Guangxi': '广西',
-    'Shanxi': '山西',
-    'Guizhou': '贵州',
-    'Jilin': '吉林',
-    'Xinjiang': '新疆',
-    'Inner Mongolia': '内蒙古',
-    'Heilongjiang': '黑龙江',
-    'Gansu': '甘肃',
-    'Hainan': '海南',
-    'Ningxia': '宁夏',
-    'Qinghai': '青海',
-    'Tibet': '西藏'
+    'hong kong': '香港',
+    'hongkong': '香港',
+    'hong kong sar': '香港',
+    'beijing': '北京',
+    'shanghai': '上海',
+    'guangzhou': '广州',
+    'shenzhen': '深圳',
+    'tianjin': '天津',
+    'chongqing': '重庆'
 };
 
 /**
- * 判断地理字段是否指向香港。
- * @param {object} geo
- * @returns {boolean}
+ * 翻译定位返回的单个地名。已含中文则直接使用。
+ * @param {string} name
+ * @returns {string}
  */
-function isHongKongLocation(geo) {
-    const values = [geo.city, geo.region, geo.regionName, geo.country, geo.country_code, geo.countryCode];
-    return values.some(value => {
-        if (!value) return false;
-        const text = String(value).trim().toLowerCase();
-        return text === 'hk' || text === 'hkg' || text === '香港' || text === 'hongkong' || text.includes('hong kong');
-    });
+function translatePlaceName(name) {
+    if (!name) return '';
+    const text = String(name).trim();
+    if (!text) return '';
+    if (/[\u4e00-\u9fa5]/.test(text)) return text;
+    return placeNameMap[text.toLowerCase()] || text;
 }
 
 /**
- * 将 IP 定位结果转成页面展示的城市名。
+ * 页面展示城市；没有城市时用地区名。两处都只做名称翻译。
  * @param {object} geo
  * @returns {string}
  */
 function resolveServerPlace(geo) {
-    if (isHongKongLocation(geo)) return '香港';
-
-    const cityName = geo.city || geo.region || geo.regionName || '';
-    if (!cityName) return '未知';
-    if (/[\u4e00-\u9fa5]/.test(cityName)) return cityName;
-    if (placeNameMap[cityName]) return placeNameMap[cityName];
-
-    const lowerName = cityName.toLowerCase();
-    for (const [en, zh] of Object.entries(placeNameMap)) {
-        if (lowerName === en.toLowerCase()) return zh;
-    }
-    return cityName;
+    const city = translatePlaceName(geo.city);
+    if (city) return city;
+    return translatePlaceName(geo.region || geo.regionName) || '未知';
 }
 
 function buildServerLocation(geo, ip) {
-    const place = resolveServerPlace(geo || {});
+    const source = geo || {};
     return {
-        province: place,
-        city: place,
-        country: (geo && geo.country) || '',
+        province: translatePlaceName(source.region || source.regionName) || '未知',
+        city: translatePlaceName(source.city) || translatePlaceName(source.region || source.regionName) || '未知',
+        country: source.country || '',
         ip: ip || ''
     };
 }
 
-// 按服务器真实出口 IP 定位城市
+// 按服务器真实出口 IP 定位。主接口 ip-api 使用 lang=zh-CN 直接返回中文。
 app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
     try {
         const cacheKey = 'server-location';
         const cachedLocation = simpleCache.get(cacheKey);
         if (cachedLocation) {
             return res.json(cachedLocation);
+        }
+
+        try {
+            const ipApiResponse = await axios.get('http://ip-api.com/json/?lang=zh-CN&fields=status,country,countryCode,regionName,city,query', {
+                timeout: 5000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
+                const location = buildServerLocation(ipApiResponse.data, ipApiResponse.data.query);
+                simpleCache.set(cacheKey, location, 86400);
+                return res.json(location);
+            }
+        } catch (ipApiError) {
+            console.log('ip-api.com失败，尝试备用方法:', ipApiError.message);
         }
 
         try {
@@ -313,23 +292,7 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
                 return res.json(location);
             }
         } catch (ipSbError) {
-            console.log('ip.sb API失败，尝试备用方法:', ipSbError.message);
-        }
-
-        try {
-            const ipApiResponse = await axios.get('http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,query', {
-                timeout: 5000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            });
-            if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
-                const location = buildServerLocation(ipApiResponse.data, ipApiResponse.data.query);
-                simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
-            }
-        } catch (ipApiError) {
-            console.log('ip-api.com失败:', ipApiError.message);
+            console.log('ip.sb API失败:', ipSbError.message);
         }
 
         const defaultLocation = { province: '未知', city: '未知', country: '', ip: '' };

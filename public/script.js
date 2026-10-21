@@ -379,7 +379,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
     }
 
-    // 服务器出口 IP 定位到的城市。香港在接口里已转成「香港」。
+    // 服务器出口 IP 定位到的城市。中文由定位接口或名称翻译给出。
     let serverPlace = '';
 
     async function fetchServerLocation() {
