@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
 const { StringDecoder } = require('string_decoder');
+const newsSearch = require('./lib/newsSearch');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -310,13 +311,22 @@ function resolveServerPlace(geo) {
     return translatePlaceName(geo.region || geo.regionName) || '未知';
 }
 
-function buildServerLocation(geo, ip) {
+function buildServerLocation(geo) {
     const source = geo || {};
     return {
         province: translatePlaceName(source.region || source.regionName) || '未知',
         city: translatePlaceName(source.city) || translatePlaceName(source.region || source.regionName) || '未知',
-        country: source.country || '',
-        ip: ip || ''
+        country: source.country || ''
+    };
+}
+
+// 响应里只留地名。旧缓存里如果还有 ip，这里也会丢掉。
+function publicServerLocation(location) {
+    const source = location || {};
+    return {
+        province: source.province || '未知',
+        city: source.city || '未知',
+        country: source.country || ''
     };
 }
 
@@ -326,20 +336,20 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
         const cacheKey = 'server-location';
         const cachedLocation = simpleCache.get(cacheKey);
         if (cachedLocation) {
-            return res.json(cachedLocation);
+            return res.json(publicServerLocation(cachedLocation));
         }
 
         try {
-            const ipApiResponse = await axios.get('http://ip-api.com/json/?lang=zh-CN&fields=status,country,countryCode,regionName,city,query', {
+            const ipApiResponse = await axios.get('http://ip-api.com/json/?lang=zh-CN&fields=status,country,countryCode,regionName,city', {
                 timeout: 5000,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 }
             });
             if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
-                const location = buildServerLocation(ipApiResponse.data, ipApiResponse.data.query);
+                const location = buildServerLocation(ipApiResponse.data);
                 simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
+                return res.json(publicServerLocation(location));
             }
         } catch (ipApiError) {
             console.log('ip-api.com失败，尝试备用方法:', ipApiError.message);
@@ -353,20 +363,20 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
                 }
             });
             if (ipResponse.data && (ipResponse.data.city || ipResponse.data.region)) {
-                const location = buildServerLocation(ipResponse.data, ipResponse.data.ip);
+                const location = buildServerLocation(ipResponse.data);
                 simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
+                return res.json(publicServerLocation(location));
             }
         } catch (ipSbError) {
             console.log('ip.sb API失败:', ipSbError.message);
         }
 
-        const defaultLocation = { province: '未知', city: '未知', country: '', ip: '' };
+        const defaultLocation = { province: '未知', city: '未知', country: '' };
         simpleCache.set(cacheKey, defaultLocation, 3600);
-        res.json(defaultLocation);
+        res.json(publicServerLocation(defaultLocation));
     } catch (error) {
         console.error('获取服务器位置失败:', error);
-        res.json({ province: '未知', city: '未知', country: '', ip: '' });
+        res.json(publicServerLocation({ province: '未知', city: '未知', country: '' }));
     }
 });
 
@@ -1387,8 +1397,13 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     try {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
-        // 步骤2: 搜索并抓取文章内容（并行抓取，搜索引擎在 searchNews 内选择）
-        articlesData = await fetchMultipleArticles(title);
+        // ===== SEARCH_V2（默认开启）=====
+        // 未设置或不是 false：走 lib/newsSearch.js（日期、打分、去重）。
+        // SEARCH_V2=false：走本文件里的旧 fetchMultipleArticles，便于对照。旧 searchNews 保持不动。
+        const searchV2Off = String(process.env.SEARCH_V2 || '').trim().toLowerCase() === 'false';
+        articlesData = searchV2Off
+            ? await fetchMultipleArticles(title)
+            : await newsSearch.fetchNewsContext(title);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
         // 发送文章链接信息（如果有）
