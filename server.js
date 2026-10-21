@@ -7,6 +7,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
+const { StringDecoder } = require('string_decoder');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -206,188 +207,14 @@ const TIANAPI_KEY = process.env.TIANAPI_KEY;
 const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
 
-// 省份名称中英文映射表
-const provinceNameMap = {
-    // 直辖市
-    'Beijing': '北京',
-    'Shanghai': '上海',
-    'Tianjin': '天津',
-    'Chongqing': '重庆',
-    // 省份
-    'Guangdong': '广东',
-    'Jiangsu': '江苏',
-    'Zhejiang': '浙江',
-    'Shandong': '山东',
-    'Henan': '河南',
-    'Sichuan': '四川',
-    'Hubei': '湖北',
-    'Hunan': '湖南',
-    'Anhui': '安徽',
-    'Fujian': '福建',
-    'Liaoning': '辽宁',
-    'Shaanxi': '陕西',
-    'Jiangxi': '江西',
-    'Hebei': '河北',
-    'Yunnan': '云南',
-    'Guangxi': '广西',
-    'Shanxi': '山西',
-    'Guizhou': '贵州',
-    'Jilin': '吉林',
-    'Xinjiang': '新疆',
-    'Inner Mongolia': '内蒙古',
-    'Heilongjiang': '黑龙江',
-    'Gansu': '甘肃',
-    'Hainan': '海南',
-    'Ningxia': '宁夏',
-    'Qinghai': '青海',
-    'Tibet': '西藏',
-    // 其他常见英文名称
-    'Beijing Municipality': '北京',
-    'Shanghai Municipality': '上海',
-    'Tianjin Municipality': '天津',
-    'Chongqing Municipality': '重庆',
-    'Guangdong Province': '广东',
-    'Jiangsu Province': '江苏',
-    'Zhejiang Province': '浙江',
-    'Shandong Province': '山东',
-    'Henan Province': '河南',
-    'Sichuan Province': '四川',
-    'Hubei Province': '湖北',
-    'Hunan Province': '湖南',
-    'Anhui Province': '安徽',
-    'Fujian Province': '福建',
-    'Liaoning Province': '辽宁',
-    'Shaanxi Province': '陕西',
-    'Jiangxi Province': '江西',
-    'Hebei Province': '河北',
-    'Yunnan Province': '云南',
-    'Guangxi Zhuang Autonomous Region': '广西',
-    'Shanxi Province': '山西',
-    'Guizhou Province': '贵州',
-    'Jilin Province': '吉林',
-    'Xinjiang Uygur Autonomous Region': '新疆',
-    'Inner Mongolia Autonomous Region': '内蒙古',
-    'Heilongjiang Province': '黑龙江',
-    'Gansu Province': '甘肃',
-    'Hainan Province': '海南',
-    'Ningxia Hui Autonomous Region': '宁夏',
-    'Qinghai Province': '青海',
-    'Tibet Autonomous Region': '西藏'
-};
-
-/**
- * 将省份名称转换为中文
- * @param {string} provinceName - 省份名称（可能是英文）
- * @returns {string} 中文省份名称
- */
-function translateProvinceName(provinceName) {
-    if (!provinceName) return '未知';
-    
-    // 如果已经是中文，直接返回
-    if (/[\u4e00-\u9fa5]/.test(provinceName)) {
-        return provinceName;
-    }
-    
-    // 查找映射表
-    if (provinceNameMap[provinceName]) {
-        return provinceNameMap[provinceName];
-    }
-    
-    // 尝试部分匹配（处理带空格或特殊字符的情况）
-    for (const [en, zh] of Object.entries(provinceNameMap)) {
-        if (provinceName.includes(en) || en.includes(provinceName)) {
-            return zh;
-        }
-    }
-    
-    // 如果找不到，返回原值
-    return provinceName;
-}
-
-// 获取服务器IP地理位置信息（省份）
-app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
-    try {
-        // 检查缓存
-        const cacheKey = 'server-location';
-        const cachedLocation = simpleCache.get(cacheKey);
-        
-        if (cachedLocation) {
-            return res.json(cachedLocation);
-        }
-        
-        // 方法1: 使用ip.sb API（免费，无需API key）
-        try {
-            const ipResponse = await axios.get('https://api.ip.sb/geoip', {
-                timeout: 5000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            });
-            
-            if (ipResponse.data && ipResponse.data.region) {
-                const rawProvince = ipResponse.data.region || ipResponse.data.regionName || '未知';
-                const location = {
-                    province: translateProvinceName(rawProvince),
-                    city: ipResponse.data.city || '',
-                    country: ipResponse.data.country || '中国',
-                    ip: ipResponse.data.ip || ''
-                };
-                
-                // 缓存24小时
-                simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
-            }
-        } catch (ipSbError) {
-            console.log('ip.sb API失败，尝试备用方法:', ipSbError.message);
-        }
-        
-        // 方法2: 使用ip-api.com（免费，有速率限制）
-        try {
-            const ipApiResponse = await axios.get('http://ip-api.com/json/?fields=status,country,regionName,city,query', {
-                timeout: 5000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            });
-            
-            if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
-                const rawProvince = ipApiResponse.data.regionName || '未知';
-                const location = {
-                    province: translateProvinceName(rawProvince),
-                    city: ipApiResponse.data.city || '',
-                    country: ipApiResponse.data.country || '中国',
-                    ip: ipApiResponse.data.query || ''
-                };
-                
-                // 缓存24小时
-                simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
-            }
-        } catch (ipApiError) {
-            console.log('ip-api.com失败:', ipApiError.message);
-        }
-        
-        // 如果都失败了，返回默认值
-        const defaultLocation = {
-            province: '未知',
-            city: '',
-            country: '中国',
-            ip: ''
-        };
-        
-        // 即使失败也缓存1小时，避免频繁请求
-        simpleCache.set(cacheKey, defaultLocation, 3600);
-        res.json(defaultLocation);
-        
-    } catch (error) {
-        console.error('获取服务器位置失败:', error);
-        res.json({
-            province: '未知',
-            city: '',
-            country: '中国',
-            ip: ''
-        });
-    }
+// 标题下不再展示服务器所在地。原先根据出口 IP 定位，大陆用户会看到机房位置（如 Virginia），与新闻和读者都无关。
+app.get(`${BASE_PATH}/api/server-location`, (req, res) => {
+    res.json({
+        province: '',
+        city: '',
+        country: '',
+        ip: ''
+    });
 });
 
 // 获取热搜数据的接口
@@ -582,13 +409,14 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         
         let fullContent = '';
         let buffer = ''; // 添加缓冲区来处理跨chunk的数据
+        const utf8Decoder = new StringDecoder('utf8');
         
         // 处理流式响应
         response.data.on('data', (chunk) => {
             if (isResponseEnded) return;
             
-            // 将新数据添加到缓冲区
-            buffer += chunk.toString();
+            // StringDecoder 会保留未完成的 UTF-8 多字节字符，避免 chunk 边界把中文截成替换字符
+            buffer += utf8Decoder.write(chunk);
             
             // 按行分割，但保留最后一行（可能不完整）
             const lines = buffer.split('\n');
@@ -642,6 +470,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         });
         
         response.data.on('end', () => {
+            buffer += utf8Decoder.end();
             // 处理缓冲区中剩余的数据
             if (buffer.trim() && !isResponseEnded) {
                 const lines = buffer.split('\n');
@@ -1444,12 +1273,13 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         
         let fullContent = '';
         let buffer = '';
+        const utf8Decoder = new StringDecoder('utf8');
         
         // 处理流式响应
         response.data.on('data', (chunk) => {
             if (isResponseEnded) return;
             
-            buffer += chunk.toString();
+            buffer += utf8Decoder.write(chunk);
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
             
@@ -1494,6 +1324,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         });
         
         response.data.on('end', () => {
+            buffer += utf8Decoder.end();
             if (buffer.trim() && !isResponseEnded) {
                 const lines = buffer.split('\n');
                 for (const line of lines) {
