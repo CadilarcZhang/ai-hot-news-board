@@ -379,15 +379,33 @@ document.addEventListener('DOMContentLoaded', function () {
         return `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
     }
 
-    // 发布时间只显示日期。地点曾来自服务器出口 IP，不是读者所在地。
+    // 服务器出口 IP 定位到的城市。香港在接口里已转成「香港」。
+    let serverPlace = '';
+
+    async function fetchServerLocation() {
+        try {
+            const response = await fetch(`${SERVER_URL}/api/server-location`);
+            const data = await response.json();
+            const place = data && (data.city || data.province);
+            if (place && place !== '未知') {
+                serverPlace = place;
+                updateAllPublishTimes();
+            }
+        } catch (error) {
+            console.error('获取服务器位置失败:', error);
+        }
+    }
+
     function updateAllPublishTimes() {
         const dateStr = formatToday();
+        const displayText = serverPlace ? `${dateStr} · ${serverPlace}` : dateStr;
         document.querySelectorAll('.author-meta p').forEach(el => {
-            el.textContent = dateStr;
+            el.textContent = displayText;
         });
     }
 
     updateAllPublishTimes();
+    fetchServerLocation();
 
     // 从URL路径中提取平台信息
     let currentPlatform = 'networkhot'; // 默认平台
@@ -1791,7 +1809,10 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             const publishTime = newsContent.querySelector('.author-meta p');
             if (publishTime) {
-                publishTime.textContent = formatToday();
+                publishTime.textContent = serverPlace ? `${formatToday()} · ${serverPlace}` : formatToday();
+                if (!serverPlace) {
+                    fetchServerLocation();
+                }
             }
 
             // 检查是否已经生成过内容

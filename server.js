@@ -207,14 +207,138 @@ const TIANAPI_KEY = process.env.TIANAPI_KEY;
 const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
 
-// 标题下不再展示服务器所在地。原先根据出口 IP 定位，大陆用户会看到机房位置（如 Virginia），与新闻和读者都无关。
-app.get(`${BASE_PATH}/api/server-location`, (req, res) => {
-    res.json({
-        province: '',
-        city: '',
-        country: '',
-        ip: ''
+// 页面展示的是服务器出口 IP 定位到的城市。香港的英文结果统一显示为「香港」。
+const placeNameMap = {
+    'Hong Kong': '香港',
+    'Hongkong': '香港',
+    'Hong Kong SAR': '香港',
+    'Hong Kong Special Administrative Region': '香港',
+    'HK': '香港',
+    'Beijing': '北京',
+    'Shanghai': '上海',
+    'Tianjin': '天津',
+    'Chongqing': '重庆',
+    'Guangdong': '广东',
+    'Jiangsu': '江苏',
+    'Zhejiang': '浙江',
+    'Shandong': '山东',
+    'Henan': '河南',
+    'Sichuan': '四川',
+    'Hubei': '湖北',
+    'Hunan': '湖南',
+    'Anhui': '安徽',
+    'Fujian': '福建',
+    'Liaoning': '辽宁',
+    'Shaanxi': '陕西',
+    'Jiangxi': '江西',
+    'Hebei': '河北',
+    'Yunnan': '云南',
+    'Guangxi': '广西',
+    'Shanxi': '山西',
+    'Guizhou': '贵州',
+    'Jilin': '吉林',
+    'Xinjiang': '新疆',
+    'Inner Mongolia': '内蒙古',
+    'Heilongjiang': '黑龙江',
+    'Gansu': '甘肃',
+    'Hainan': '海南',
+    'Ningxia': '宁夏',
+    'Qinghai': '青海',
+    'Tibet': '西藏'
+};
+
+/**
+ * 判断地理字段是否指向香港。
+ * @param {object} geo
+ * @returns {boolean}
+ */
+function isHongKongLocation(geo) {
+    const values = [geo.city, geo.region, geo.regionName, geo.country, geo.country_code, geo.countryCode];
+    return values.some(value => {
+        if (!value) return false;
+        const text = String(value).trim().toLowerCase();
+        return text === 'hk' || text === 'hkg' || text === '香港' || text === 'hongkong' || text.includes('hong kong');
     });
+}
+
+/**
+ * 将 IP 定位结果转成页面展示的城市名。
+ * @param {object} geo
+ * @returns {string}
+ */
+function resolveServerPlace(geo) {
+    if (isHongKongLocation(geo)) return '香港';
+
+    const cityName = geo.city || geo.region || geo.regionName || '';
+    if (!cityName) return '未知';
+    if (/[\u4e00-\u9fa5]/.test(cityName)) return cityName;
+    if (placeNameMap[cityName]) return placeNameMap[cityName];
+
+    const lowerName = cityName.toLowerCase();
+    for (const [en, zh] of Object.entries(placeNameMap)) {
+        if (lowerName === en.toLowerCase()) return zh;
+    }
+    return cityName;
+}
+
+function buildServerLocation(geo, ip) {
+    const place = resolveServerPlace(geo || {});
+    return {
+        province: place,
+        city: place,
+        country: (geo && geo.country) || '',
+        ip: ip || ''
+    };
+}
+
+// 按服务器真实出口 IP 定位城市
+app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
+    try {
+        const cacheKey = 'server-location';
+        const cachedLocation = simpleCache.get(cacheKey);
+        if (cachedLocation) {
+            return res.json(cachedLocation);
+        }
+
+        try {
+            const ipResponse = await axios.get('https://api.ip.sb/geoip', {
+                timeout: 5000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            if (ipResponse.data && (ipResponse.data.city || ipResponse.data.region)) {
+                const location = buildServerLocation(ipResponse.data, ipResponse.data.ip);
+                simpleCache.set(cacheKey, location, 86400);
+                return res.json(location);
+            }
+        } catch (ipSbError) {
+            console.log('ip.sb API失败，尝试备用方法:', ipSbError.message);
+        }
+
+        try {
+            const ipApiResponse = await axios.get('http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,query', {
+                timeout: 5000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
+                const location = buildServerLocation(ipApiResponse.data, ipApiResponse.data.query);
+                simpleCache.set(cacheKey, location, 86400);
+                return res.json(location);
+            }
+        } catch (ipApiError) {
+            console.log('ip-api.com失败:', ipApiError.message);
+        }
+
+        const defaultLocation = { province: '未知', city: '未知', country: '', ip: '' };
+        simpleCache.set(cacheKey, defaultLocation, 3600);
+        res.json(defaultLocation);
+    } catch (error) {
+        console.error('获取服务器位置失败:', error);
+        res.json({ province: '未知', city: '未知', country: '', ip: '' });
+    }
 });
 
 // 获取热搜数据的接口
@@ -1532,6 +1656,7 @@ app.listen(PORT, () => {
 
 // 确保在最后导出app以供Vercel使用
 module.exports = app;
+module.exports.resolveServerPlace = resolveServerPlace;
 
 // 添加缓存清理定时任务
 setInterval(() => {
