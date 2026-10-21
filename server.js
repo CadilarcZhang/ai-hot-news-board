@@ -554,7 +554,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-flash",
                 "messages": [
                     {
                         "role": "system",
@@ -1415,7 +1415,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 'Content-Type': 'application/json'
             },
             data: {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-flash",
                 // "model": "Pro/zai-org/GLM-4.7",
                 "messages": [
                     {
@@ -1777,7 +1777,7 @@ app.post(`${BASE_PATH}/api/cache-warmup`, async (req, res) => {
                         'Content-Type': 'application/json'
                     },
                     data: {
-                        "model": "deepseek-v4-flash",
+                        "model": "deepseek-flash",
                         "messages": [
                             {
                                 "role": "system",
