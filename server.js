@@ -207,17 +207,83 @@ const TIANAPI_KEY = process.env.TIANAPI_KEY;
 const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
 
-// 定位服务未给出中文时，只翻译常见英文城市/地区名；未命中则原样显示。
+// 定位服务返回英文时的地名翻译。省级全称与城市小表合并；未命中则原样显示，不写死城市。
 const placeNameMap = {
+    'beijing': '北京',
+    'shanghai': '上海',
+    'tianjin': '天津',
+    'chongqing': '重庆',
+    'guangdong': '广东',
+    'jiangsu': '江苏',
+    'zhejiang': '浙江',
+    'shandong': '山东',
+    'henan': '河南',
+    'sichuan': '四川',
+    'hubei': '湖北',
+    'hunan': '湖南',
+    'anhui': '安徽',
+    'fujian': '福建',
+    'liaoning': '辽宁',
+    'shaanxi': '陕西',
+    'jiangxi': '江西',
+    'hebei': '河北',
+    'yunnan': '云南',
+    'guangxi': '广西',
+    'shanxi': '山西',
+    'guizhou': '贵州',
+    'jilin': '吉林',
+    'xinjiang': '新疆',
+    'inner mongolia': '内蒙古',
+    'heilongjiang': '黑龙江',
+    'gansu': '甘肃',
+    'hainan': '海南',
+    'ningxia': '宁夏',
+    'qinghai': '青海',
+    'tibet': '西藏',
+    'beijing municipality': '北京',
+    'shanghai municipality': '上海',
+    'tianjin municipality': '天津',
+    'chongqing municipality': '重庆',
+    'guangdong province': '广东',
+    'jiangsu province': '江苏',
+    'zhejiang province': '浙江',
+    'shandong province': '山东',
+    'henan province': '河南',
+    'sichuan province': '四川',
+    'hubei province': '湖北',
+    'hunan province': '湖南',
+    'anhui province': '安徽',
+    'fujian province': '福建',
+    'liaoning province': '辽宁',
+    'shaanxi province': '陕西',
+    'jiangxi province': '江西',
+    'hebei province': '河北',
+    'yunnan province': '云南',
+    'guangxi zhuang autonomous region': '广西',
+    'shanxi province': '山西',
+    'guizhou province': '贵州',
+    'jilin province': '吉林',
+    'xinjiang uygur autonomous region': '新疆',
+    'xinjiang uyghur autonomous region': '新疆',
+    'inner mongolia autonomous region': '内蒙古',
+    'heilongjiang province': '黑龙江',
+    'gansu province': '甘肃',
+    'hainan province': '海南',
+    'ningxia hui autonomous region': '宁夏',
+    'qinghai province': '青海',
+    'tibet autonomous region': '西藏',
     'hong kong': '香港',
     'hongkong': '香港',
     'hong kong sar': '香港',
-    'beijing': '北京',
-    'shanghai': '上海',
+    'hong kong special administrative region': '香港',
+    'macau': '澳门',
+    'macao': '澳门',
+    'macau sar': '澳门',
+    'macao sar': '澳门',
+    'taiwan': '台湾',
+    'taiwan province': '台湾',
     'guangzhou': '广州',
-    'shenzhen': '深圳',
-    'tianjin': '天津',
-    'chongqing': '重庆'
+    'shenzhen': '深圳'
 };
 
 /**
@@ -635,70 +701,111 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
 
 // ==================== 联网搜索和内容抓取工具函数 ====================
 
+const SEARCH_TIMEOUT_MS = 10000;
+const ARTICLE_TIMEOUT_MS = 8000;
+
 /**
- * 搜索新闻文章
+ * Google 是否作为主搜索。
+ * 开关严格为 true（忽略大小写）时启用；严格为 false 时关闭。
+ * 开关未设置时，仅当 API Key 与 Engine ID 都存在才启用。
+ * @param {string|undefined} rawSwitch
+ * @param {string} apiKey
+ * @param {string} engineId
+ * @returns {boolean}
+ */
+function isGoogleSearchEnabled(rawSwitch, apiKey, engineId) {
+    const hasCredentials = Boolean(apiKey && engineId);
+    if (rawSwitch === undefined || rawSwitch === null || String(rawSwitch).trim() === '') {
+        return hasCredentials;
+    }
+    const normalized = String(rawSwitch).trim().toLowerCase();
+    if (normalized === 'false') return false;
+    if (normalized === 'true') return hasCredentials;
+    return false;
+}
+
+function describeGoogleSearchGate(rawSwitch, apiKey, engineId) {
+    const hasCredentials = Boolean(apiKey && engineId);
+    if (rawSwitch !== undefined && rawSwitch !== null && String(rawSwitch).trim() !== '') {
+        const normalized = String(rawSwitch).trim().toLowerCase();
+        if (normalized === 'false') return 'Google 搜索已关闭（GOOGLE_SEARCH_SWITCH=false），改用百度';
+        if (normalized === 'true' && !hasCredentials) return 'Google 搜索未启用：开关为 true，但缺少 API Key 或 Engine ID，改用百度';
+        if (normalized !== 'true') return 'Google 搜索未启用：GOOGLE_SEARCH_SWITCH 不是 true，改用百度';
+    }
+    return 'Google 搜索未启用：未设置开关，且缺少 API Key 或 Engine ID，改用百度';
+}
+
+function describeGoogleError(error) {
+    const status = error.response ? error.response.status : null;
+    const apiError = error.response && error.response.data && error.response.data.error;
+    const reason = apiError && Array.isArray(apiError.errors) && apiError.errors[0]
+        ? apiError.errors[0].reason
+        : '';
+    const message = (apiError && apiError.message) || error.message || '';
+    return { status, reason, message: String(message).slice(0, 300) };
+}
+
+/**
+ * 搜索新闻文章。Google Custom Search 为主，百度抓取为备用。
  * @param {string} query - 搜索关键词
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 async function searchNews(query) {
     try {
-        // 方法1: 使用Google Custom Search API（如果配置了）
-        // 从环境变量或config文件读取
+        // 方法1: Google Custom Search 为主搜索
         const config = require('./config/index.js');
-        const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
-        const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        
-        if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
+        const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
+        const googleEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
+        const googleSwitch = process.env.GOOGLE_SEARCH_SWITCH;
+
+        if (isGoogleSearchEnabled(googleSwitch, googleApiKey, googleEngineId)) {
             try {
-                // 添加中文搜索参数，提高中文搜索结果质量
-                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
-                
-                // 获取当前部署的域名，用于设置Referer
-                const referer = process.env.VERCEL_URL 
-                    ? `https://${process.env.VERCEL_URL}` 
+                const referer = process.env.VERCEL_URL
+                    ? `https://${process.env.VERCEL_URL}`
                     : (process.env.SITE_URL || 'https://news.zxt.net.cn');
-                
-                console.log('使用Google Custom Search API搜索:', query);
-                const googleResponse = await axios.get(googleUrl, { 
-                    timeout: 15000,
+
+                console.log(`搜索引擎: Google Custom Search，查询: ${query}`);
+                const googleResponse = await axios.get('https://www.googleapis.com/customsearch/v1', {
+                    timeout: SEARCH_TIMEOUT_MS,
+                    params: {
+                        key: googleApiKey,
+                        cx: googleEngineId,
+                        q: query,
+                        num: 5,
+                        lr: 'lang_zh-CN',
+                        cr: 'countryCN'
+                    },
                     headers: {
                         'Accept': 'application/json',
                         'Referer': referer,
                         'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
                     }
                 });
-                
-                if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
-                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
-                    return googleResponse.data.items.map(item => ({
+
+                const items = googleResponse.data && Array.isArray(googleResponse.data.items)
+                    ? googleResponse.data.items
+                    : [];
+                console.log(`搜索引擎: Google Custom Search，结果数: ${items.length}`);
+                if (items.length > 0) {
+                    return items.map(item => ({
                         title: item.title,
                         link: item.link,
                         snippet: item.snippet || item.htmlSnippet || ''
                     }));
-                } else {
-                    console.log('Google搜索返回空结果');
                 }
             } catch (googleError) {
-                // 详细记录错误信息，便于调试
-                if (googleError.response) {
-                    console.error('Google搜索API错误:', {
-                        status: googleError.response.status,
-                        statusText: googleError.response.statusText,
-                        data: googleError.response.data
-                    });
-                } else {
-                    console.error('Google搜索失败，尝试备用方法:', googleError.message);
-                }
+                const info = describeGoogleError(googleError);
+                console.error(`搜索引擎: Google Custom Search，失败，状态码: ${info.status}，原因: ${info.reason || 'unknown'}，信息: ${info.message}`);
             }
         } else {
-            console.log('Google Custom Search API未配置，使用备用搜索方法');
+            console.log(describeGoogleSearchGate(googleSwitch, googleApiKey, googleEngineId));
         }
         
         // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
         try {
             const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
             
+            console.log(`搜索引擎: Baidu，查询: ${query}`);
             const response = await axios.get(searchUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -706,7 +813,7 @@ async function searchNews(query) {
                     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                     'Referer': 'https://www.baidu.com/'
                 },
-                timeout: 10000,
+                timeout: SEARCH_TIMEOUT_MS,
                 maxRedirects: 5
             });
             
@@ -746,12 +853,13 @@ async function searchNews(query) {
                     }
                 }
             });
-            console.log("百度搜索结果: " + JSON.stringify(results));
+            console.log(`搜索引擎: Baidu，结果数: ${results.length}`);
             if (results.length > 0) {
                 return results;
             }
         } catch (baiduError) {
-            console.error('百度搜索失败:', baiduError.message);
+            const status = baiduError.response ? baiduError.response.status : null;
+            console.error(`搜索引擎: Baidu，失败，状态码: ${status}，信息: ${baiduError.message}`);
         }
         
         // 如果都失败了，返回空数组
@@ -776,7 +884,7 @@ async function fetchArticleContent(url) {
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'Referer': 'https://www.baidu.com/'
             },
-            timeout: 10000,
+            timeout: ARTICLE_TIMEOUT_MS,
             maxRedirects: 5
         });
         
@@ -856,27 +964,26 @@ async function fetchMultipleArticles(query) {
             return { content: null, articles: [] };
     }
         
-        // 抓取前3个搜索结果的内容
-        const articles = [];
-        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
-            const result = searchResults[i];
-            // console.log(`正在抓取: ${result.title} - ${result.link}`);
-            
+        // 并行抓取前 3 篇，单篇失败不影响其余结果
+        const topResults = searchResults.slice(0, 3);
+        const settled = await Promise.allSettled(topResults.map(async (result) => {
             const content = await fetchArticleContent(result.link);
-            console.log("网页抓取文章内容: " + content);
             if (content && content.length > 200) {
-                articles.push({
+                return {
                     title: result.title,
                     content: content,
                     source: result.link
-                });
+                };
             }
-            
-            // 避免请求过快
-            if (i < Math.min(3, searchResults.length) - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
+            console.log(`文章内容不足或抓取失败: ${result.title}，长度 ${content ? content.length : 0}`);
+            return null;
+        }));
+        const articles = settled
+            .filter(item => item.status === 'fulfilled' && item.value)
+            .map(item => item.value);
+        settled.filter(item => item.status === 'rejected').forEach(item => {
+            console.error('文章抓取异常:', item.reason && item.reason.message ? item.reason.message : item.reason);
+        });
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1280,9 +1387,8 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     try {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        // 步骤2: 搜索并抓取文章内容
-        articlesData = GOOGLE_SEARCH_SWITCH ? await fetchMultipleArticlesWithRetry(title) : await fetchMultipleArticles(title);
+        // 步骤2: 搜索并抓取文章内容（并行抓取，搜索引擎在 searchNews 内选择）
+        articlesData = await fetchMultipleArticles(title);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
         // 发送文章链接信息（如果有）
@@ -1620,6 +1726,8 @@ app.listen(PORT, () => {
 // 确保在最后导出app以供Vercel使用
 module.exports = app;
 module.exports.resolveServerPlace = resolveServerPlace;
+module.exports.translatePlaceName = translatePlaceName;
+module.exports.isGoogleSearchEnabled = isGoogleSearchEnabled;
 
 // 添加缓存清理定时任务
 setInterval(() => {
