@@ -10,6 +10,7 @@ const cheerio = require('cheerio');
 const { StringDecoder } = require('string_decoder');
 const newsSearch = require('./lib/newsSearch');
 const tianApi = require('./lib/tianApi');
+const netDiag = require('./lib/netDiag');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -450,6 +451,21 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
         const info = tianApi.summarizeUpstreamError(error);
         console.error('获取热搜数据失败', { code: info.code, status: info.status });
         res.status(500).json({ error: '获取热搜数据失败', code: info.code, status: info.status });
+    }
+});
+
+// Temporary region probe. 404 unless DIAG_TOKEN matches. Removed after the investigation.
+app.get(`${BASE_PATH}/api/net-diag`, async (req, res) => {
+    const expected = process.env.DIAG_TOKEN || '';
+    const given = req.get('x-diag-token') || '';
+    if (!expected || given !== expected) {
+        return res.status(404).json({ error: 'not found' });
+    }
+    try {
+        const report = await netDiag.run(String(req.query.section || 'meta'));
+        res.json(report);
+    } catch (error) {
+        res.status(500).json({ error: 'diag failed', code: error.code || null });
     }
 });
 
