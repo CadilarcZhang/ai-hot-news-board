@@ -353,12 +353,57 @@ async function testArticleSelection() {
     assert.strictEqual(search.MAX_GOOGLE_CALLS, 2);
 }
 
+async function testBaiduRedirectResolvedBeforeFilter() {
+    assert.strictEqual(search.isNonArticleUrl('https://www.baidu.com/link?url=encrypted'), true);
+
+    const ranked = await search.searchNewsV2('特斯拉降价', {
+        googleEnabled: false,
+        bypassCache: true,
+        baiduSearch: async () => ([
+            {
+                title: '特斯拉宣布中国区降价',
+                link: 'https://www.baidu.com/link?url=article-token',
+                snippet: '特斯拉宣布降价',
+                source: 'baidu'
+            },
+            {
+                title: '特斯拉中国降价落地',
+                link: '/link?url=tag-token',
+                snippet: '特斯拉降价',
+                source: 'baidu'
+            },
+            {
+                title: '特斯拉宣布降价',
+                link: 'https://www.baidu.com/link?url=dead-token',
+                snippet: '特斯拉降价',
+                source: 'baidu'
+            }
+        ]),
+        resolveRedirect: async (url) => {
+            if (url.includes('article-token')) return 'https://www.thepaper.cn/newsDetail_forward_99';
+            if (url.includes('tag-token')) return 'https://news.example.com/tag/tesla';
+            return null;
+        }
+    });
+
+    assert.strictEqual(ranked.length, 1);
+    assert.strictEqual(ranked[0].link, 'https://www.thepaper.cn/newsDetail_forward_99');
+
+    const direct = await search.resolveSearchLinks([
+        { title: '已是正文', link: '/link?url=' + encodeURIComponent('https://www.thepaper.cn/newsDetail_forward_7') }
+    ], {
+        resolveRedirect: async () => { throw new Error('should not follow an embedded article url'); }
+    });
+    assert.strictEqual(direct[0].link, 'https://www.thepaper.cn/newsDetail_forward_7');
+}
+
 async function main() {
     await testQueryAndParams();
     testScoringAndDedup();
     testTitleFloorBlocklistAndDomainCap();
     await testGoogleCallBudget();
     await testArticleSelection();
+    await testBaiduRedirectResolvedBeforeFilter();
     console.log('newsSearch tests ok');
 }
 
