@@ -178,6 +178,128 @@ async function testGoogleCallBudget() {
     assert.strictEqual(emptyBaidu, 1);
 }
 
+function testTitleFloorBlocklistAndDomainCap() {
+    const now = Date.parse('2026-10-21T00:00:00Z');
+    const topic = '退一赔三';
+    const real = {
+        title: '买到假货可退一赔三',
+        link: 'https://example.com/law/real.html',
+        snippet: '案件进入审理',
+        publishedAt: now - 40 * 86400000,
+        rank: 9
+    };
+    const renhe = {
+        title: '仁和药业发布年度业绩',
+        link: 'https://news.163.com/a/1.html',
+        snippet: '退一赔三退一赔三',
+        publishedAt: now - 3600000,
+        rank: 0
+    };
+    const houthi = {
+        title: '胡塞武装袭击商船',
+        link: 'https://news.sina.com.cn/w/2026-10-20/doc-x.shtml',
+        snippet: '退一赔三相关搜索',
+        publishedAt: now - 3600000,
+        rank: 1
+    };
+    const spam = {
+        title: '退一赔三最新消息',
+        link: 'https://www.garbau.com/a/1.html',
+        snippet: '退一赔三',
+        publishedAt: now,
+        rank: 0
+    };
+    const weak = {
+        title: '退一步想更稳妥',
+        link: 'https://www.thepaper.cn/newsDetail_forward_77',
+        snippet: '退一赔三退一赔三',
+        publishedAt: now - 3600000,
+        rank: 2
+    };
+
+    assert.ok(search.titleOverlap(topic, real.title) >= search.TITLE_OVERLAP_FLOOR);
+    assert.ok(search.titleOverlap(topic, renhe.title) < search.TITLE_OVERLAP_FLOOR);
+    assert.ok(search.scoreResult(topic, renhe, now) > search.scoreResult(topic, real, now) === false);
+    const ranked = search.filterAndRankResults(topic, [renhe, houthi, spam, weak, real], now);
+    assert.deepStrictEqual(ranked.map(item => item.link), [real.link]);
+
+    assert.strictEqual(search.isBlockedSource('https://garbau.com/a/1.html'), true);
+    assert.strictEqual(search.isBlockedSource('https://news.example.com/tag/refund'), true);
+    assert.strictEqual(search.isBlockedSource('https://news.example.com/tags/a'), true);
+    assert.strictEqual(search.isBlockedSource('https://news.example.com/topic/law'), true);
+    assert.strictEqual(search.isBlockedSource('https://news.example.com/search?q=1'), true);
+    assert.strictEqual(search.isBlockedSource('https://so.example.com/s?wd=退一赔三'), true);
+    assert.strictEqual(search.isBlockedSource('https://news.example.com/list/hot'), true);
+    assert.strictEqual(search.isBlockedSource('https://news.example.com/index.html'), true);
+    assert.strictEqual(search.isBlockedSource('https://www.thepaper.cn/newsDetail_forward_99'), false);
+
+    const hosts = [
+        ['https://www.163.com/dy/article/1.html', '消费者遇假货可退一赔三'],
+        ['https://m.163.com/dy/article/2.html', '新规明确退一赔三标准'],
+        ['https://dy.163.com/article/3.html', '多地法院支持退一赔三'],
+        ['https://money.163.com/article/4.html', '商家拒绝退一赔三被罚'],
+        ['https://c.m.163.com/news/a/5.html', '退一赔三案例连续增加'],
+        ['https://auto.163.com/article/6.html', '律师解读退一赔三适用']
+    ];
+    const crowded = hosts.map(([link, title], rank) => ({
+        title,
+        link,
+        snippet: '退一赔三',
+        publishedAt: now - 86400000,
+        rank
+    }));
+    crowded.push({
+        title: '退一赔三条款开始实施',
+        link: 'https://www.thepaper.cn/newsDetail_forward_88',
+        snippet: '退一赔三',
+        publishedAt: now - 86400000,
+        rank: 8
+    });
+    const capped = search.filterAndRankResults(topic, crowded, now);
+    const from163 = capped.filter(item => search.registrableDomain(item.link) === '163.com');
+    assert.strictEqual(from163.length, search.MAX_PER_DOMAIN);
+    assert.deepStrictEqual(from163.map(item => item.rank), [0, 1]);
+    assert.ok(capped.some(item => item.link.includes('thepaper.cn')));
+    assert.strictEqual(search.registrableDomain('https://m.163.com/dy/article/2.html'), '163.com');
+    assert.strictEqual(search.registrableDomain('https://www.163.com/dy/article/1.html'), '163.com');
+
+    const ordered = search.filterAndRankResults(topic, [
+        {
+            title: '消费者买到假货可退一赔三',
+            link: 'https://example.com/law/newer.html',
+            snippet: '退一赔三',
+            publishedAt: now - 86400000,
+            rank: 5
+        },
+        {
+            title: '监管部门重申退一赔三',
+            link: 'https://example.org/law/older.html',
+            snippet: '退一赔三',
+            publishedAt: now - 2 * 86400000,
+            rank: 0
+        }
+    ], now);
+    assert.ok(ordered[0].link.includes('example.com'));
+
+    const byRank = search.filterAndRankResults(topic, [
+        {
+            title: '电商平台落实退一赔三',
+            link: 'https://example.com/law/late.html',
+            snippet: '退一赔三',
+            publishedAt: now - 86400000,
+            rank: 5
+        },
+        {
+            title: '法院判决支持退一赔三',
+            link: 'https://example.org/law/early.html',
+            snippet: '退一赔三',
+            publishedAt: now - 86400000,
+            rank: 1
+        }
+    ], now);
+    assert.strictEqual(byRank[0].rank, 1);
+}
+
 async function testArticleSelection() {
     const body = '特斯拉宣布在中国市场降价，涉及多款车型，经销商同步调整售价。'.repeat(8);
     const calls = [];
@@ -213,11 +335,28 @@ async function testArticleSelection() {
     });
     assert.strictEqual(secondWave.length, 6);
     assert.strictEqual(mixed.length, 2);
+
+    const seen = [];
+    const many = [1, 2, 3, 4, 5].map(index => article(
+        `https://www.thepaper.cn/newsDetail_forward_${index}0`,
+        '特斯拉宣布中国区降价'
+    ));
+    const picked = await search.selectArticles(many, '特斯拉降价', {
+        fetchText: async url => {
+            seen.push(url);
+            return body;
+        }
+    });
+    assert.strictEqual(picked.length, 3);
+    assert.strictEqual(seen.length, 4);
+    assert.strictEqual(search.ARTICLE_TIMEOUT_MS, 4000);
+    assert.strictEqual(search.MAX_GOOGLE_CALLS, 2);
 }
 
 async function main() {
     await testQueryAndParams();
     testScoringAndDedup();
+    testTitleFloorBlocklistAndDomainCap();
     await testGoogleCallBudget();
     await testArticleSelection();
     console.log('newsSearch tests ok');
