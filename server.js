@@ -838,61 +838,17 @@ async function searchNews(query) {
             console.log(describeGoogleSearchGate(googleSwitch, googleApiKey, googleEngineId));
         }
         
-        // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
+        // 方法2: 百度移动搜索。桌面搜索页会落到安全验证；验证页不当成空结果。
         try {
-            const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-            
             console.log(`搜索引擎: Baidu，查询: ${query}`);
-            const response = await axios.get(searchUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Referer': 'https://www.baidu.com/'
-                },
-                timeout: SEARCH_TIMEOUT_MS,
-                maxRedirects: 5
-            });
-            
-            const $ = cheerio.load(response.data);
-            const results = [];
-            
-            // 解析百度搜索结果 - 尝试多种选择器
-            $('.result, .c-result, .result-op').each((index, element) => {
-                if (results.length >= 5) return false; // 最多取5个结果
-                
-                const $el = $(element);
-                const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
-                let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
-                const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
-                
-                if (title && link) {
-                    // 处理百度跳转链接
-                    if (link.startsWith('/link?url=')) {
-                        // 尝试提取真实URL
-                        try {
-                            const urlMatch = link.match(/url=([^&]+)/);
-                            if (urlMatch) {
-                                link = decodeURIComponent(urlMatch[1]);
-                            }
-                        } catch (e) {
-                            // 如果解析失败，跳过这个结果
-                            return;
-                        }
-                    }
-                    
-                    if (link && link.startsWith('http')) {
-                        results.push({
-                            title,
-                            link: link,
-                            snippet: snippet || title
-                        });
-                    }
-                }
-            });
+            const results = await newsSearch.searchBaidu(query);
             console.log(`搜索引擎: Baidu，结果数: ${results.length}`);
             if (results.length > 0) {
-                return results;
+                return results.map(item => ({
+                    title: item.title,
+                    link: item.link,
+                    snippet: item.snippet
+                }));
             }
         } catch (baiduError) {
             const status = baiduError.response ? baiduError.response.status : null;

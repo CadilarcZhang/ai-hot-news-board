@@ -397,6 +397,57 @@ async function testBaiduRedirectResolvedBeforeFilter() {
     assert.strictEqual(direct[0].link, 'https://www.thepaper.cn/newsDetail_forward_7');
 }
 
+function testBaiduChallengeIsNotAResult() {
+    const challenge = `<!doctype html><html><head><title>百度安全验证</title></head><body>
+        <div class="result"><a href="https://evil.example/planted"><h3>不应被当成新闻</h3></a></div>
+        </body></html>`;
+    const blocked = search.readBaiduPage(challenge, 'https://wappass.baidu.com/static/captcha/tuxing.html');
+    assert.strictEqual(blocked.challenged, true);
+    assert.strictEqual(blocked.results.length, 0);
+
+    const mobile = `<!doctype html><html><head><title>纪念长征胜利90周年 - 百度</title></head><body>
+        <script>var copy="安全验证"</script>
+        <div class="result"><a href="https://www.news.cn/politics/2026/story.htm"><h3>纪念长征胜利90周年大会举行</h3></a>
+        <div class="c-abstract">大会在北京举行</div></div>
+        </body></html>`;
+    const page = search.readBaiduPage(mobile, 'https://m.baidu.com/s?word=test');
+    assert.strictEqual(page.challenged, false);
+    assert.strictEqual(page.results.length, 1);
+    assert.strictEqual(page.results[0].link, 'https://www.news.cn/politics/2026/story.htm');
+}
+
+async function testBaiduChallengeRetriesOnce() {
+    let calls = 0;
+    const results = await search.searchBaiduPages(async () => {
+        calls += 1;
+        if (calls === 1) {
+            return {
+                html: '<html><head><title>百度安全验证</title></head><body></body></html>',
+                finalUrl: 'https://wappass.baidu.com/static/captcha/tuxing.html'
+            };
+        }
+        return {
+            html: `<html><head><title>查询 - 百度</title></head><body>
+                <div class="result"><a href="https://www.news.cn/a.htm"><h3>纪念大会举行</h3></a></div>
+                </body></html>`,
+            finalUrl: 'https://m.baidu.com/s?word=test'
+        };
+    });
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(results.length, 1);
+
+    let exhausted = 0;
+    const empty = await search.searchBaiduPages(async () => {
+        exhausted += 1;
+        return {
+            html: '<html><head><title>百度安全验证</title></head><body><div class="result"><a href="https://evil.example/x"><h3>假结果</h3></a></div></body></html>',
+            finalUrl: 'https://wappass.baidu.com/static/captcha/tuxing.html'
+        };
+    });
+    assert.strictEqual(exhausted, 2);
+    assert.strictEqual(empty.length, 0);
+}
+
 async function main() {
     await testQueryAndParams();
     testScoringAndDedup();
@@ -404,6 +455,8 @@ async function main() {
     await testGoogleCallBudget();
     await testArticleSelection();
     await testBaiduRedirectResolvedBeforeFilter();
+    testBaiduChallengeIsNotAResult();
+    await testBaiduChallengeRetriesOnce();
     console.log('newsSearch tests ok');
 }
 
