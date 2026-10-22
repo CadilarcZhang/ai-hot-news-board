@@ -824,26 +824,28 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 3000);
     }
 
-    // 获取热搜数据
-    function fetchHotNews(platform = 'networkhot', refresh = false) {
-        currentPlatform = platform;
-        targetNewsId = null;
+    // 获取热搜数据。失败后再请求一次；占位列表不打开正文。
+    function fetchHotNews(platform = 'networkhot', refresh = false, attempt = 0) {
+        if (attempt === 0) {
+            currentPlatform = platform;
+            targetNewsId = null;
 
-        updateUrlWithPlatform(platform);
+            updateUrlWithPlatform(platform);
 
-        // 更新平台标签的激活状态
-        document.querySelectorAll('.platform-tab').forEach(tab => {
-            tab.classList.toggle('active', tab.dataset.platform === platform);
-        });
+            // 更新平台标签的激活状态
+            document.querySelectorAll('.platform-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.platform === platform);
+            });
 
-        // 显示加载状态
-        const hotNewsList = document.getElementById('hot-news-list');
-        hotNewsList.innerHTML = '<div class="loading-list">加载热搜数据中...</div>';
+            // 显示加载状态
+            const hotNewsList = document.getElementById('hot-news-list');
+            hotNewsList.innerHTML = '<div class="loading-list">加载热搜数据中...</div>';
+        }
 
         fetch(`${SERVER_URL}/api/hot-news?platform=${platform}&refresh=${refresh}`)
             .then(response => response.json())
             .then(data => {
-                if (data.code === 200) {
+                if (data.code === 200 && data.result && Array.isArray(data.result.list)) {
                     renderHotNewsList(data.result.list);
 
                     if (targetNewsId) {
@@ -855,20 +857,20 @@ document.addEventListener('DOMContentLoaded', function () {
                             previewNews(1);
                         }, 300);
                     }
+                } else if (attempt < 1) {
+                    setTimeout(() => fetchHotNews(platform, refresh, attempt + 1), 400);
                 } else {
-                    console.error('获取热搜失败:', data.msg || data.error);
+                    console.error('获取热搜失败:', data.msg || data.error || data.code);
                     renderHotNewsList(getFallbackData(platform));
-                    setTimeout(() => {
-                        previewNews(1);
-                    }, 300);
                 }
             })
             .catch(error => {
+                if (attempt < 1) {
+                    setTimeout(() => fetchHotNews(platform, refresh, attempt + 1), 400);
+                    return;
+                }
                 console.error('API请求错误:', error);
                 renderHotNewsList(getFallbackData(platform));
-                setTimeout(() => {
-                    selectNewsByIndex(1);
-                }, 300);
             });
     }
 
@@ -977,6 +979,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const li = document.createElement('li');
             li.className = 'hot-item';
             li.dataset.id = index + 1;
+            if (hotNews.fallback) li.dataset.fallback = '1';
 
             const rankClass = index < 3 ? ` top${index + 1}` : '';
 
@@ -1006,6 +1009,11 @@ document.addEventListener('DOMContentLoaded', function () {
             li.addEventListener('click', function(e) {
                 // 如果点击的是切换按钮，不执行其他操作
                 if (isMobile && e.target.closest('.toggle-btn')) {
+                    return;
+                }
+
+                // 占位行只提示加载失败，不拿它去生成正文
+                if (this.dataset.fallback === '1') {
                     return;
                 }
 
@@ -1061,8 +1069,8 @@ document.addEventListener('DOMContentLoaded', function () {
             hotNewsList.appendChild(li);
         });
 
-        // 页面加载时默认选中第一个热搜，除非URL中有指定的newsId
-        if (hotNews.length > 0 && !targetNewsId) {
+        // 页面加载时默认选中第一个热搜，除非URL中有指定的newsId。占位列表不选中。
+        if (hotNews.length > 0 && !targetNewsId && !hotNews.fallback) {
             const firstItem = document.querySelector('.hot-item');
             if (firstItem) {
                 firstItem.classList.add('active');
@@ -1103,7 +1111,9 @@ document.addEventListener('DOMContentLoaded', function () {
             ]
         };
 
-        return fallbackData[platform] || fallbackData.weibo;
+        const list = fallbackData[platform] || fallbackData.weibo;
+        list.fallback = true;
+        return list;
     }
 
     // 初始化平台标签点击事件
@@ -1196,7 +1206,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!hotItem) return;
 
             const newsId = hotItem.dataset.id;
-            if (!newsId) return;
+            if (!newsId || hotItem.dataset.fallback === '1') return;
 
             // 检查是否已存在 mobile-content，不存在则创建
             let mobileContent = document.querySelector(`[data-id="mobile-news-${newsId}"]`);

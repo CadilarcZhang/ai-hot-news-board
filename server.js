@@ -4,13 +4,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const net = require('net');
-const dns = require('dns').promises;
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
 const { StringDecoder } = require('string_decoder');
 const newsSearch = require('./lib/newsSearch');
+const tianApi = require('./lib/tianApi');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -51,6 +50,11 @@ const enhancedCache = {
         this.stats.hits++;
         
         return item.value;
+    },
+    // 过期后仍返回上次的值，供上游失败时兜底。不删除条目。
+    getStale: function(key) {
+        const item = this.data[key];
+        return item ? item.value : null;
     },
     // 延长缓存项的生命周期
     extend: function(key, additionalTtl) {
@@ -414,82 +418,39 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
                 endpoint = 'networkhot';
         }
         
-        const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
-        
-        const response = await axios.get(apiUrl);
-        // console.log(JSON.stringify(response.data));
-        // 缓存结果，设置15分钟过期（增加缓存时间）
-        simpleCache.set(cacheKey, response.data, 1800);
-        
-        res.json(response.data);
-    } catch (error) {
-        console.error('获取热搜数据失败:', error);
-        res.status(500).json({ error: '获取热搜数据失败', message: error.message });
-    }
-});
-
-// 临时连通性探测。不读取、不返回任何密钥。确认函数区域后会删除。
-function probeTcp(host, port, timeoutMs) {
-    return new Promise((resolve) => {
-        const started = Date.now();
-        const socket = net.connect({ host, port, timeout: timeoutMs });
-        const finish = (code) => {
-            socket.destroy();
-            resolve({ port, code, ms: Date.now() - started });
-        };
-        socket.once('connect', () => finish(null));
-        socket.once('timeout', () => finish('ETIMEDOUT'));
-        socket.once('error', (error) => finish(error.code || 'ERROR'));
-    });
-}
-
-app.get(`${BASE_PATH}/api/net-probe`, async (req, res) => {
-    const timeoutMs = 8000;
-    const hosts = ['apis.tianapi.com', 'api.tianapi.com', 'api.deepseek.com', 'api.siliconflow.cn'];
-    const checks = await Promise.all(hosts.map(async (host) => {
-        const dnsStarted = Date.now();
-        let addresses = [];
-        let dnsCode = null;
+        const staleKey = `hot-news-stale-${platform}`;
+        let data;
         try {
-            const records = await dns.lookup(host, { all: true });
-            addresses = records.map((record) => record.address);
+            data = await tianApi.fetchHotList(endpoint, TIANAPI_KEY);
         } catch (error) {
-            dnsCode = error.code || 'DNS_ERROR';
-        }
-        const dnsMs = Date.now() - dnsStarted;
-        const tcp443 = addresses[0]
-            ? await probeTcp(addresses[0], 443, timeoutMs)
-            : { port: 443, code: 'NO_ADDRESS', ms: null };
-        const tcp80 = host.endsWith('tianapi.com') && addresses[0]
-            ? await probeTcp(addresses[0], 80, timeoutMs)
-            : null;
-        let httpStatus = null;
-        let httpCode = null;
-        let httpMs = null;
-        if (!tcp443.code) {
-            const httpStarted = Date.now();
-            try {
-                const response = await axios.get(`https://${host}/`, {
-                    timeout: timeoutMs,
-                    validateStatus: () => true,
-                    maxRedirects: 0
-                });
-                httpStatus = response.status;
-            } catch (error) {
-                httpCode = error.code || 'HTTP_ERROR';
+            const info = tianApi.summarizeUpstreamError(error);
+            const stale = simpleCache.get(staleKey) || simpleCache.getStale(cacheKey);
+            console.error('获取热搜数据失败', {
+                platform,
+                code: info.code,
+                status: info.status,
+                stale: Boolean(stale)
+            });
+            if (stale) {
+                return res.json(stale);
             }
-            httpMs = Date.now() - httpStarted;
+            return res.status(500).json({
+                error: '获取热搜数据失败',
+                code: info.code,
+                status: info.status
+            });
         }
-        return { host, dnsMs, dnsCode, addressCount: addresses.length, tcp443, tcp80, httpStatus, httpCode, httpMs };
-    }));
-    const idParts = String(req.headers['x-vercel-id'] || '').split('::').filter(Boolean);
-    const edgeRegion = idParts.length >= 2 ? idParts[0] : null;
-    console.log('net-probe', process.env.VERCEL_REGION || 'unknown', edgeRegion || 'no-edge');
-    res.json({
-        vercelRegion: process.env.VERCEL_REGION || null,
-        edgeRegion,
-        checks
-    });
+
+        // 新鲜缓存 30 分钟。陈旧副本留在本实例内存里，上游失败时返回。
+        // Vercel 每个实例内存互不相通，也没有已配置的持久存储，冷启动后没有副本。
+        simpleCache.set(cacheKey, data, 1800);
+        simpleCache.set(staleKey, data, 7 * 24 * 3600);
+        res.json(data);
+    } catch (error) {
+        const info = tianApi.summarizeUpstreamError(error);
+        console.error('获取热搜数据失败', { code: info.code, status: info.status });
+        res.status(500).json({ error: '获取热搜数据失败', code: info.code, status: info.status });
+    }
 });
 
 // 流式生成AI内容的接口 - 使用SSE (Server-Sent Events)
@@ -1723,8 +1684,9 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
         
         res.json({ image: imageUrl });
     } catch (error) {
-        console.error('图片生成失败:', error);
-        res.status(500).json({ error: '图片生成失败', message: error.message });
+        const info = tianApi.summarizeUpstreamError(error);
+        console.error('图片生成失败', { code: info.code, status: info.status });
+        res.status(500).json({ error: '图片生成失败' });
     }
 });
 
