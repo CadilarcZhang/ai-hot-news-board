@@ -4,6 +4,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const net = require('net');
+const dns = require('dns').promises;
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
@@ -424,6 +426,70 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
         console.error('获取热搜数据失败:', error);
         res.status(500).json({ error: '获取热搜数据失败', message: error.message });
     }
+});
+
+// 临时连通性探测。不读取、不返回任何密钥。确认函数区域后会删除。
+function probeTcp(host, port, timeoutMs) {
+    return new Promise((resolve) => {
+        const started = Date.now();
+        const socket = net.connect({ host, port, timeout: timeoutMs });
+        const finish = (code) => {
+            socket.destroy();
+            resolve({ port, code, ms: Date.now() - started });
+        };
+        socket.once('connect', () => finish(null));
+        socket.once('timeout', () => finish('ETIMEDOUT'));
+        socket.once('error', (error) => finish(error.code || 'ERROR'));
+    });
+}
+
+app.get(`${BASE_PATH}/api/net-probe`, async (req, res) => {
+    const timeoutMs = 8000;
+    const hosts = ['apis.tianapi.com', 'api.tianapi.com', 'api.deepseek.com', 'api.siliconflow.cn'];
+    const checks = await Promise.all(hosts.map(async (host) => {
+        const dnsStarted = Date.now();
+        let addresses = [];
+        let dnsCode = null;
+        try {
+            const records = await dns.lookup(host, { all: true });
+            addresses = records.map((record) => record.address);
+        } catch (error) {
+            dnsCode = error.code || 'DNS_ERROR';
+        }
+        const dnsMs = Date.now() - dnsStarted;
+        const tcp443 = addresses[0]
+            ? await probeTcp(addresses[0], 443, timeoutMs)
+            : { port: 443, code: 'NO_ADDRESS', ms: null };
+        const tcp80 = host.endsWith('tianapi.com') && addresses[0]
+            ? await probeTcp(addresses[0], 80, timeoutMs)
+            : null;
+        let httpStatus = null;
+        let httpCode = null;
+        let httpMs = null;
+        if (!tcp443.code) {
+            const httpStarted = Date.now();
+            try {
+                const response = await axios.get(`https://${host}/`, {
+                    timeout: timeoutMs,
+                    validateStatus: () => true,
+                    maxRedirects: 0
+                });
+                httpStatus = response.status;
+            } catch (error) {
+                httpCode = error.code || 'HTTP_ERROR';
+            }
+            httpMs = Date.now() - httpStarted;
+        }
+        return { host, dnsMs, dnsCode, addressCount: addresses.length, tcp443, tcp80, httpStatus, httpCode, httpMs };
+    }));
+    const idParts = String(req.headers['x-vercel-id'] || '').split('::').filter(Boolean);
+    const edgeRegion = idParts.length >= 2 ? idParts[0] : null;
+    console.log('net-probe', process.env.VERCEL_REGION || 'unknown', edgeRegion || 'no-edge');
+    res.json({
+        vercelRegion: process.env.VERCEL_REGION || null,
+        edgeRegion,
+        checks
+    });
 });
 
 // 流式生成AI内容的接口 - 使用SSE (Server-Sent Events)
