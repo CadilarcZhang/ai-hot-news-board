@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "regions": ["hkg1"],
+  "regions": ["icn1"],
   "builds": [
     {
       "src": "server.js",
