@@ -7,6 +7,9 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
+const { StringDecoder } = require('string_decoder');
+const newsSearch = require('./lib/newsSearch');
+const tianApi = require('./lib/tianApi');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -47,6 +50,11 @@ const enhancedCache = {
         this.stats.hits++;
         
         return item.value;
+    },
+    // 过期后仍返回上次的值，供上游失败时兜底。不删除条目。
+    getStale: function(key) {
+        const item = this.data[key];
+        return item ? item.value : null;
     },
     // 延长缓存项的生命周期
     extend: function(key, additionalTtl) {
@@ -206,116 +214,153 @@ const TIANAPI_KEY = process.env.TIANAPI_KEY;
 const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
 
-// 省份名称中英文映射表
-const provinceNameMap = {
-    // 直辖市
-    'Beijing': '北京',
-    'Shanghai': '上海',
-    'Tianjin': '天津',
-    'Chongqing': '重庆',
-    // 省份
-    'Guangdong': '广东',
-    'Jiangsu': '江苏',
-    'Zhejiang': '浙江',
-    'Shandong': '山东',
-    'Henan': '河南',
-    'Sichuan': '四川',
-    'Hubei': '湖北',
-    'Hunan': '湖南',
-    'Anhui': '安徽',
-    'Fujian': '福建',
-    'Liaoning': '辽宁',
-    'Shaanxi': '陕西',
-    'Jiangxi': '江西',
-    'Hebei': '河北',
-    'Yunnan': '云南',
-    'Guangxi': '广西',
-    'Shanxi': '山西',
-    'Guizhou': '贵州',
-    'Jilin': '吉林',
-    'Xinjiang': '新疆',
-    'Inner Mongolia': '内蒙古',
-    'Heilongjiang': '黑龙江',
-    'Gansu': '甘肃',
-    'Hainan': '海南',
-    'Ningxia': '宁夏',
-    'Qinghai': '青海',
-    'Tibet': '西藏',
-    // 其他常见英文名称
-    'Beijing Municipality': '北京',
-    'Shanghai Municipality': '上海',
-    'Tianjin Municipality': '天津',
-    'Chongqing Municipality': '重庆',
-    'Guangdong Province': '广东',
-    'Jiangsu Province': '江苏',
-    'Zhejiang Province': '浙江',
-    'Shandong Province': '山东',
-    'Henan Province': '河南',
-    'Sichuan Province': '四川',
-    'Hubei Province': '湖北',
-    'Hunan Province': '湖南',
-    'Anhui Province': '安徽',
-    'Fujian Province': '福建',
-    'Liaoning Province': '辽宁',
-    'Shaanxi Province': '陕西',
-    'Jiangxi Province': '江西',
-    'Hebei Province': '河北',
-    'Yunnan Province': '云南',
-    'Guangxi Zhuang Autonomous Region': '广西',
-    'Shanxi Province': '山西',
-    'Guizhou Province': '贵州',
-    'Jilin Province': '吉林',
-    'Xinjiang Uygur Autonomous Region': '新疆',
-    'Inner Mongolia Autonomous Region': '内蒙古',
-    'Heilongjiang Province': '黑龙江',
-    'Gansu Province': '甘肃',
-    'Hainan Province': '海南',
-    'Ningxia Hui Autonomous Region': '宁夏',
-    'Qinghai Province': '青海',
-    'Tibet Autonomous Region': '西藏'
+// 定位服务返回英文时的地名翻译。省级全称与城市小表合并；未命中则原样显示，不写死城市。
+const placeNameMap = {
+    'beijing': '北京',
+    'shanghai': '上海',
+    'tianjin': '天津',
+    'chongqing': '重庆',
+    'guangdong': '广东',
+    'jiangsu': '江苏',
+    'zhejiang': '浙江',
+    'shandong': '山东',
+    'henan': '河南',
+    'sichuan': '四川',
+    'hubei': '湖北',
+    'hunan': '湖南',
+    'anhui': '安徽',
+    'fujian': '福建',
+    'liaoning': '辽宁',
+    'shaanxi': '陕西',
+    'jiangxi': '江西',
+    'hebei': '河北',
+    'yunnan': '云南',
+    'guangxi': '广西',
+    'shanxi': '山西',
+    'guizhou': '贵州',
+    'jilin': '吉林',
+    'xinjiang': '新疆',
+    'inner mongolia': '内蒙古',
+    'heilongjiang': '黑龙江',
+    'gansu': '甘肃',
+    'hainan': '海南',
+    'ningxia': '宁夏',
+    'qinghai': '青海',
+    'tibet': '西藏',
+    'beijing municipality': '北京',
+    'shanghai municipality': '上海',
+    'tianjin municipality': '天津',
+    'chongqing municipality': '重庆',
+    'guangdong province': '广东',
+    'jiangsu province': '江苏',
+    'zhejiang province': '浙江',
+    'shandong province': '山东',
+    'henan province': '河南',
+    'sichuan province': '四川',
+    'hubei province': '湖北',
+    'hunan province': '湖南',
+    'anhui province': '安徽',
+    'fujian province': '福建',
+    'liaoning province': '辽宁',
+    'shaanxi province': '陕西',
+    'jiangxi province': '江西',
+    'hebei province': '河北',
+    'yunnan province': '云南',
+    'guangxi zhuang autonomous region': '广西',
+    'shanxi province': '山西',
+    'guizhou province': '贵州',
+    'jilin province': '吉林',
+    'xinjiang uygur autonomous region': '新疆',
+    'xinjiang uyghur autonomous region': '新疆',
+    'inner mongolia autonomous region': '内蒙古',
+    'heilongjiang province': '黑龙江',
+    'gansu province': '甘肃',
+    'hainan province': '海南',
+    'ningxia hui autonomous region': '宁夏',
+    'qinghai province': '青海',
+    'tibet autonomous region': '西藏',
+    'hong kong': '香港',
+    'hongkong': '香港',
+    'hong kong sar': '香港',
+    'hong kong special administrative region': '香港',
+    'macau': '澳门',
+    'macao': '澳门',
+    'macau sar': '澳门',
+    'macao sar': '澳门',
+    'taiwan': '台湾',
+    'taiwan province': '台湾',
+    'guangzhou': '广州',
+    'shenzhen': '深圳'
 };
 
 /**
- * 将省份名称转换为中文
- * @param {string} provinceName - 省份名称（可能是英文）
- * @returns {string} 中文省份名称
+ * 翻译定位返回的单个地名。已含中文则直接使用。
+ * @param {string} name
+ * @returns {string}
  */
-function translateProvinceName(provinceName) {
-    if (!provinceName) return '未知';
-    
-    // 如果已经是中文，直接返回
-    if (/[\u4e00-\u9fa5]/.test(provinceName)) {
-        return provinceName;
-    }
-    
-    // 查找映射表
-    if (provinceNameMap[provinceName]) {
-        return provinceNameMap[provinceName];
-    }
-    
-    // 尝试部分匹配（处理带空格或特殊字符的情况）
-    for (const [en, zh] of Object.entries(provinceNameMap)) {
-        if (provinceName.includes(en) || en.includes(provinceName)) {
-            return zh;
-        }
-    }
-    
-    // 如果找不到，返回原值
-    return provinceName;
+function translatePlaceName(name) {
+    if (!name) return '';
+    const text = String(name).trim();
+    if (!text) return '';
+    if (/[\u4e00-\u9fa5]/.test(text)) return text;
+    return placeNameMap[text.toLowerCase()] || text;
 }
 
-// 获取服务器IP地理位置信息（省份）
+/**
+ * 页面展示城市；没有城市时用地区名。两处都只做名称翻译。
+ * @param {object} geo
+ * @returns {string}
+ */
+function resolveServerPlace(geo) {
+    const city = translatePlaceName(geo.city);
+    if (city) return city;
+    return translatePlaceName(geo.region || geo.regionName) || '未知';
+}
+
+function buildServerLocation(geo) {
+    const source = geo || {};
+    return {
+        province: translatePlaceName(source.region || source.regionName) || '未知',
+        city: translatePlaceName(source.city) || translatePlaceName(source.region || source.regionName) || '未知',
+        country: source.country || ''
+    };
+}
+
+// 响应里只留地名。旧缓存里如果还有 ip，这里也会丢掉。
+function publicServerLocation(location) {
+    const source = location || {};
+    return {
+        province: source.province || '未知',
+        city: source.city || '未知',
+        country: source.country || ''
+    };
+}
+
+// 按服务器真实出口 IP 定位。主接口 ip-api 使用 lang=zh-CN 直接返回中文。
 app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
     try {
-        // 检查缓存
         const cacheKey = 'server-location';
         const cachedLocation = simpleCache.get(cacheKey);
-        
         if (cachedLocation) {
-            return res.json(cachedLocation);
+            return res.json(publicServerLocation(cachedLocation));
         }
-        
-        // 方法1: 使用ip.sb API（免费，无需API key）
+
+        try {
+            const ipApiResponse = await axios.get('http://ip-api.com/json/?lang=zh-CN&fields=status,country,countryCode,regionName,city', {
+                timeout: 5000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
+                const location = buildServerLocation(ipApiResponse.data);
+                simpleCache.set(cacheKey, location, 86400);
+                return res.json(publicServerLocation(location));
+            }
+        } catch (ipApiError) {
+            console.log('ip-api.com失败，尝试备用方法:', ipApiError.message);
+        }
+
         try {
             const ipResponse = await axios.get('https://api.ip.sb/geoip', {
                 timeout: 5000,
@@ -323,70 +368,21 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 }
             });
-            
-            if (ipResponse.data && ipResponse.data.region) {
-                const rawProvince = ipResponse.data.region || ipResponse.data.regionName || '未知';
-                const location = {
-                    province: translateProvinceName(rawProvince),
-                    city: ipResponse.data.city || '',
-                    country: ipResponse.data.country || '中国',
-                    ip: ipResponse.data.ip || ''
-                };
-                
-                // 缓存24小时
+            if (ipResponse.data && (ipResponse.data.city || ipResponse.data.region)) {
+                const location = buildServerLocation(ipResponse.data);
                 simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
+                return res.json(publicServerLocation(location));
             }
         } catch (ipSbError) {
-            console.log('ip.sb API失败，尝试备用方法:', ipSbError.message);
+            console.log('ip.sb API失败:', ipSbError.message);
         }
-        
-        // 方法2: 使用ip-api.com（免费，有速率限制）
-        try {
-            const ipApiResponse = await axios.get('http://ip-api.com/json/?fields=status,country,regionName,city,query', {
-                timeout: 5000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            });
-            
-            if (ipApiResponse.data && ipApiResponse.data.status === 'success') {
-                const rawProvince = ipApiResponse.data.regionName || '未知';
-                const location = {
-                    province: translateProvinceName(rawProvince),
-                    city: ipApiResponse.data.city || '',
-                    country: ipApiResponse.data.country || '中国',
-                    ip: ipApiResponse.data.query || ''
-                };
-                
-                // 缓存24小时
-                simpleCache.set(cacheKey, location, 86400);
-                return res.json(location);
-            }
-        } catch (ipApiError) {
-            console.log('ip-api.com失败:', ipApiError.message);
-        }
-        
-        // 如果都失败了，返回默认值
-        const defaultLocation = {
-            province: '未知',
-            city: '',
-            country: '中国',
-            ip: ''
-        };
-        
-        // 即使失败也缓存1小时，避免频繁请求
+
+        const defaultLocation = { province: '未知', city: '未知', country: '' };
         simpleCache.set(cacheKey, defaultLocation, 3600);
-        res.json(defaultLocation);
-        
+        res.json(publicServerLocation(defaultLocation));
     } catch (error) {
         console.error('获取服务器位置失败:', error);
-        res.json({
-            province: '未知',
-            city: '',
-            country: '中国',
-            ip: ''
-        });
+        res.json(publicServerLocation({ province: '未知', city: '未知', country: '' }));
     }
 });
 
@@ -422,17 +418,38 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
                 endpoint = 'networkhot';
         }
         
-        const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
-        
-        const response = await axios.get(apiUrl);
-        // console.log(JSON.stringify(response.data));
-        // 缓存结果，设置15分钟过期（增加缓存时间）
-        simpleCache.set(cacheKey, response.data, 1800);
-        
-        res.json(response.data);
+        const staleKey = `hot-news-stale-${platform}`;
+        let data;
+        try {
+            data = await tianApi.fetchHotList(endpoint, TIANAPI_KEY);
+        } catch (error) {
+            const info = tianApi.summarizeUpstreamError(error);
+            const stale = simpleCache.get(staleKey) || simpleCache.getStale(cacheKey);
+            console.error('获取热搜数据失败', {
+                platform,
+                code: info.code,
+                status: info.status,
+                stale: Boolean(stale)
+            });
+            if (stale) {
+                return res.json(stale);
+            }
+            return res.status(500).json({
+                error: '获取热搜数据失败',
+                code: info.code,
+                status: info.status
+            });
+        }
+
+        // 新鲜缓存 30 分钟。陈旧副本留在本实例内存里，上游失败时返回。
+        // Vercel 每个实例内存互不相通，也没有已配置的持久存储，冷启动后没有副本。
+        simpleCache.set(cacheKey, data, 1800);
+        simpleCache.set(staleKey, data, 7 * 24 * 3600);
+        res.json(data);
     } catch (error) {
-        console.error('获取热搜数据失败:', error);
-        res.status(500).json({ error: '获取热搜数据失败', message: error.message });
+        const info = tianApi.summarizeUpstreamError(error);
+        console.error('获取热搜数据失败', { code: info.code, status: info.status });
+        res.status(500).json({ error: '获取热搜数据失败', code: info.code, status: info.status });
     }
 });
 
@@ -582,13 +599,14 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         
         let fullContent = '';
         let buffer = ''; // 添加缓冲区来处理跨chunk的数据
+        const utf8Decoder = new StringDecoder('utf8');
         
         // 处理流式响应
         response.data.on('data', (chunk) => {
             if (isResponseEnded) return;
             
-            // 将新数据添加到缓冲区
-            buffer += chunk.toString();
+            // StringDecoder 会保留未完成的 UTF-8 多字节字符，避免 chunk 边界把中文截成替换字符
+            buffer += utf8Decoder.write(chunk);
             
             // 按行分割，但保留最后一行（可能不完整）
             const lines = buffer.split('\n');
@@ -642,6 +660,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         });
         
         response.data.on('end', () => {
+            buffer += utf8Decoder.end();
             // 处理缓冲区中剩余的数据
             if (buffer.trim() && !isResponseEnded) {
                 const lines = buffer.split('\n');
@@ -719,123 +738,121 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
 
 // ==================== 联网搜索和内容抓取工具函数 ====================
 
+const SEARCH_TIMEOUT_MS = 10000;
+const ARTICLE_TIMEOUT_MS = 8000;
+
 /**
- * 搜索新闻文章
+ * Google 是否作为主搜索。
+ * 开关严格为 true（忽略大小写）时启用；严格为 false 时关闭。
+ * 开关未设置时，仅当 API Key 与 Engine ID 都存在才启用。
+ * @param {string|undefined} rawSwitch
+ * @param {string} apiKey
+ * @param {string} engineId
+ * @returns {boolean}
+ */
+function isGoogleSearchEnabled(rawSwitch, apiKey, engineId) {
+    const hasCredentials = Boolean(apiKey && engineId);
+    if (rawSwitch === undefined || rawSwitch === null || String(rawSwitch).trim() === '') {
+        return hasCredentials;
+    }
+    const normalized = String(rawSwitch).trim().toLowerCase();
+    if (normalized === 'false') return false;
+    if (normalized === 'true') return hasCredentials;
+    return false;
+}
+
+function describeGoogleSearchGate(rawSwitch, apiKey, engineId) {
+    const hasCredentials = Boolean(apiKey && engineId);
+    if (rawSwitch !== undefined && rawSwitch !== null && String(rawSwitch).trim() !== '') {
+        const normalized = String(rawSwitch).trim().toLowerCase();
+        if (normalized === 'false') return 'Google 搜索已关闭（GOOGLE_SEARCH_SWITCH=false），改用百度';
+        if (normalized === 'true' && !hasCredentials) return 'Google 搜索未启用：开关为 true，但缺少 API Key 或 Engine ID，改用百度';
+        if (normalized !== 'true') return 'Google 搜索未启用：GOOGLE_SEARCH_SWITCH 不是 true，改用百度';
+    }
+    return 'Google 搜索未启用：未设置开关，且缺少 API Key 或 Engine ID，改用百度';
+}
+
+function describeGoogleError(error) {
+    const status = error.response ? error.response.status : null;
+    const apiError = error.response && error.response.data && error.response.data.error;
+    const reason = apiError && Array.isArray(apiError.errors) && apiError.errors[0]
+        ? apiError.errors[0].reason
+        : '';
+    const message = (apiError && apiError.message) || error.message || '';
+    return { status, reason, message: String(message).slice(0, 300) };
+}
+
+/**
+ * 搜索新闻文章。Google Custom Search 为主，百度抓取为备用。
  * @param {string} query - 搜索关键词
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 async function searchNews(query) {
     try {
-        // 方法1: 使用Google Custom Search API（如果配置了）
-        // 从环境变量或config文件读取
+        // 方法1: Google Custom Search 为主搜索
         const config = require('./config/index.js');
-        const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
-        const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        
-        if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
+        const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
+        const googleEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
+        const googleSwitch = process.env.GOOGLE_SEARCH_SWITCH;
+
+        if (isGoogleSearchEnabled(googleSwitch, googleApiKey, googleEngineId)) {
             try {
-                // 添加中文搜索参数，提高中文搜索结果质量
-                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
-                
-                // 获取当前部署的域名，用于设置Referer
-                const referer = process.env.VERCEL_URL 
-                    ? `https://${process.env.VERCEL_URL}` 
+                const referer = process.env.VERCEL_URL
+                    ? `https://${process.env.VERCEL_URL}`
                     : (process.env.SITE_URL || 'https://news.zxt.net.cn');
-                
-                console.log('使用Google Custom Search API搜索:', query);
-                const googleResponse = await axios.get(googleUrl, { 
-                    timeout: 15000,
+
+                console.log(`搜索引擎: Google Custom Search，查询: ${query}`);
+                const googleResponse = await axios.get('https://www.googleapis.com/customsearch/v1', {
+                    timeout: SEARCH_TIMEOUT_MS,
+                    params: {
+                        key: googleApiKey,
+                        cx: googleEngineId,
+                        q: query,
+                        num: 5,
+                        lr: 'lang_zh-CN',
+                        cr: 'countryCN'
+                    },
                     headers: {
                         'Accept': 'application/json',
                         'Referer': referer,
                         'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
                     }
                 });
-                
-                if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
-                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
-                    return googleResponse.data.items.map(item => ({
+
+                const items = googleResponse.data && Array.isArray(googleResponse.data.items)
+                    ? googleResponse.data.items
+                    : [];
+                console.log(`搜索引擎: Google Custom Search，结果数: ${items.length}`);
+                if (items.length > 0) {
+                    return items.map(item => ({
                         title: item.title,
                         link: item.link,
                         snippet: item.snippet || item.htmlSnippet || ''
                     }));
-                } else {
-                    console.log('Google搜索返回空结果');
                 }
             } catch (googleError) {
-                // 详细记录错误信息，便于调试
-                if (googleError.response) {
-                    console.error('Google搜索API错误:', {
-                        status: googleError.response.status,
-                        statusText: googleError.response.statusText,
-                        data: googleError.response.data
-                    });
-                } else {
-                    console.error('Google搜索失败，尝试备用方法:', googleError.message);
-                }
+                const info = describeGoogleError(googleError);
+                console.error(`搜索引擎: Google Custom Search，失败，状态码: ${info.status}，原因: ${info.reason || 'unknown'}，信息: ${info.message}`);
             }
         } else {
-            console.log('Google Custom Search API未配置，使用备用搜索方法');
+            console.log(describeGoogleSearchGate(googleSwitch, googleApiKey, googleEngineId));
         }
         
-        // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
+        // 方法2: 百度移动搜索。桌面搜索页会落到安全验证；验证页不当成空结果。
         try {
-            const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-            
-            const response = await axios.get(searchUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Referer': 'https://www.baidu.com/'
-                },
-                timeout: 10000,
-                maxRedirects: 5
-            });
-            
-            const $ = cheerio.load(response.data);
-            const results = [];
-            
-            // 解析百度搜索结果 - 尝试多种选择器
-            $('.result, .c-result, .result-op').each((index, element) => {
-                if (results.length >= 5) return false; // 最多取5个结果
-                
-                const $el = $(element);
-                const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
-                let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
-                const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
-                
-                if (title && link) {
-                    // 处理百度跳转链接
-                    if (link.startsWith('/link?url=')) {
-                        // 尝试提取真实URL
-                        try {
-                            const urlMatch = link.match(/url=([^&]+)/);
-                            if (urlMatch) {
-                                link = decodeURIComponent(urlMatch[1]);
-                            }
-                        } catch (e) {
-                            // 如果解析失败，跳过这个结果
-                            return;
-                        }
-                    }
-                    
-                    if (link && link.startsWith('http')) {
-                        results.push({
-                            title,
-                            link: link,
-                            snippet: snippet || title
-                        });
-                    }
-                }
-            });
-            console.log("百度搜索结果: " + JSON.stringify(results));
+            console.log(`搜索引擎: Baidu，查询: ${query}`);
+            const results = await newsSearch.searchBaidu(query);
+            console.log(`搜索引擎: Baidu，结果数: ${results.length}`);
             if (results.length > 0) {
-                return results;
+                return results.map(item => ({
+                    title: item.title,
+                    link: item.link,
+                    snippet: item.snippet
+                }));
             }
         } catch (baiduError) {
-            console.error('百度搜索失败:', baiduError.message);
+            const status = baiduError.response ? baiduError.response.status : null;
+            console.error(`搜索引擎: Baidu，失败，状态码: ${status}，信息: ${baiduError.message}`);
         }
         
         // 如果都失败了，返回空数组
@@ -860,7 +877,7 @@ async function fetchArticleContent(url) {
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'Referer': 'https://www.baidu.com/'
             },
-            timeout: 10000,
+            timeout: ARTICLE_TIMEOUT_MS,
             maxRedirects: 5
         });
         
@@ -940,27 +957,26 @@ async function fetchMultipleArticles(query) {
             return { content: null, articles: [] };
     }
         
-        // 抓取前3个搜索结果的内容
-        const articles = [];
-        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
-            const result = searchResults[i];
-            // console.log(`正在抓取: ${result.title} - ${result.link}`);
-            
+        // 并行抓取前 3 篇，单篇失败不影响其余结果
+        const topResults = searchResults.slice(0, 3);
+        const settled = await Promise.allSettled(topResults.map(async (result) => {
             const content = await fetchArticleContent(result.link);
-            console.log("网页抓取文章内容: " + content);
             if (content && content.length > 200) {
-                articles.push({
+                return {
                     title: result.title,
                     content: content,
                     source: result.link
-                });
+                };
             }
-            
-            // 避免请求过快
-            if (i < Math.min(3, searchResults.length) - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
+            console.log(`文章内容不足或抓取失败: ${result.title}，长度 ${content ? content.length : 0}`);
+            return null;
+        }));
+        const articles = settled
+            .filter(item => item.status === 'fulfilled' && item.value)
+            .map(item => item.value);
+        settled.filter(item => item.status === 'rejected').forEach(item => {
+            console.error('文章抓取异常:', item.reason && item.reason.message ? item.reason.message : item.reason);
+        });
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1364,9 +1380,13 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     try {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        // 步骤2: 搜索并抓取文章内容
-        articlesData = GOOGLE_SEARCH_SWITCH ? await fetchMultipleArticlesWithRetry(title) : await fetchMultipleArticles(title);
+        // ===== SEARCH_V2（默认开启）=====
+        // 未设置或不是 false：走 lib/newsSearch.js（日期、打分、去重）。
+        // SEARCH_V2=false：走本文件里的旧 fetchMultipleArticles，便于对照。旧 searchNews 保持不动。
+        const searchV2Off = String(process.env.SEARCH_V2 || '').trim().toLowerCase() === 'false';
+        articlesData = searchV2Off
+            ? await fetchMultipleArticles(title)
+            : await newsSearch.fetchNewsContext(title);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
         // 发送文章链接信息（如果有）
@@ -1444,12 +1464,13 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         
         let fullContent = '';
         let buffer = '';
+        const utf8Decoder = new StringDecoder('utf8');
         
         // 处理流式响应
         response.data.on('data', (chunk) => {
             if (isResponseEnded) return;
             
-            buffer += chunk.toString();
+            buffer += utf8Decoder.write(chunk);
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
             
@@ -1494,6 +1515,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         });
         
         response.data.on('end', () => {
+            buffer += utf8Decoder.end();
             if (buffer.trim() && !isResponseEnded) {
                 const lines = buffer.split('\n');
                 for (const line of lines) {
@@ -1618,8 +1640,9 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
         
         res.json({ image: imageUrl });
     } catch (error) {
-        console.error('图片生成失败:', error);
-        res.status(500).json({ error: '图片生成失败', message: error.message });
+        const info = tianApi.summarizeUpstreamError(error);
+        console.error('图片生成失败', { code: info.code, status: info.status });
+        res.status(500).json({ error: '图片生成失败' });
     }
 });
 
@@ -1701,6 +1724,9 @@ app.listen(PORT, () => {
 
 // 确保在最后导出app以供Vercel使用
 module.exports = app;
+module.exports.resolveServerPlace = resolveServerPlace;
+module.exports.translatePlaceName = translatePlaceName;
+module.exports.isGoogleSearchEnabled = isGoogleSearchEnabled;
 
 // 添加缓存清理定时任务
 setInterval(() => {
