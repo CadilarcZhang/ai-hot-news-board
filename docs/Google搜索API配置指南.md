@@ -112,7 +112,7 @@ A:
 A: Google Custom Search API要求必须使用自定义搜索引擎，即使你想搜索整个互联网也需要创建一个。
 
 ### Q: 如何提高中文搜索结果质量？
-A: 新检索（`lib/newsSearch.js`，`SEARCH_V2` 默认开启）使用 `lr=lang_zh-CN`、`gl=cn`、`hl=zh-CN`，并用 `dateRestrict=d3`（不足再放宽到 `d7`）。不再传 `cr=countryCN`，避免按服务器所在国把中文媒体过滤掉。可信站点只在本地打分里加权。
+A: 代码中已经添加了 `lr=lang_zh-CN&cr=countryCN` 参数，这会优先返回中文和中国地区的结果。
 
 ### Q: 如何查看API使用情况？
 A: 在Google Cloud Console的"API和服务" > "配额"中查看使用情况。
