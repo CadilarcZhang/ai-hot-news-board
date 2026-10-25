@@ -29,7 +29,7 @@
   "devDependencies": {
     "nodemon": "^3.0.1",
     "playwright": "^1.57.0",
-    "puppeteer": "^24.34.0"
+    "puppeteer": "^25.16.0"
   },
   "engines": {
     "node": ">=14.0.0"
@@ -44,6 +44,7 @@
     "lodash": "4.18.1",
     "follow-redirects": "1.16.1",
     "js-yaml": "4.3.2",
-    "ws": "8.22.0"
+    "ws": "8.22.0",
+    "uuid": "11.1.1"
   }
 }
