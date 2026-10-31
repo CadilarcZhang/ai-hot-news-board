@@ -7,8 +7,9 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "local": "BASE_PATH=/hot-news node server.js",
-    "build": "mkdir -p dist && cp -r public dist/ && cp server.js dist/",
-    "deploy": "npm run build && cd dist && npm start"
+    "build": "mkdir -p dist && cp -r public dist/ && cp server.js dist/ && cp -r lib dist/",
+    "deploy": "npm run build && cd dist && npm start",
+    "test": "node tests/hotNewsCache.test.js"
   },
   "keywords": [],
   "author": "",
