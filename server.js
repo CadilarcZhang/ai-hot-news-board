@@ -1,5 +1,7 @@
 // 加载环境变量（必须在其他模块之前）
 require('dotenv').config();
+// 出站 DNS：必须在任何 axios 请求之前固定为 IPv4。
+const { withIpv4 } = require('./lib/outboundNetwork');
 
 const express = require('express');
 const cors = require('cors');
@@ -430,7 +432,9 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
 
         const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
         // 5s timeout: fail fast to stale in-process copy instead of hanging the function.
-        const response = await axios.get(apiUrl, { timeout: 5000 });
+        // family 4: TianAPI from the Node 26 preview runtime exceeded this budget
+        // while racing IPv6. Production Node 24 completes on IPv4 in about 2s.
+        const response = await axios.get(apiUrl, withIpv4({ timeout: 5000 }));
         hotNewsCache.set(platform, response.data);
         res.setHeader('X-Hot-News-Cache', refresh ? 'REFRESH' : 'MISS');
         res.json(response.data);
@@ -794,19 +798,39 @@ async function searchNews(query) {
         }
         
         // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
+        // Google 密钥过期时会立刻 400，这里是预览实际拿到结果的路径。
+        // Node 26 上这条连接会 socket hang up；对连接重置重试一次，并强制 IPv4。
         try {
             const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-            
-            const response = await axios.get(searchUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Referer': 'https://www.baidu.com/'
-                },
-                timeout: 10000,
-                maxRedirects: 5
-            });
+            const baiduHeaders = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.baidu.com/'
+            };
+            let response;
+            let baiduError;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    response = await axios.get(searchUrl, withIpv4({
+                        headers: baiduHeaders,
+                        timeout: 10000,
+                        maxRedirects: 5
+                    }));
+                    baiduError = null;
+                    break;
+                } catch (error) {
+                    baiduError = error;
+                    const reset = error.code === 'ECONNRESET' || /socket hang up/i.test(error.message || '');
+                    console.error('百度搜索失败:', error.message);
+                    if (!reset || attempt === 1) {
+                        break;
+                    }
+                }
+            }
+            if (baiduError || !response) {
+                throw baiduError || new Error('百度搜索无响应');
+            }
             
             const $ = cheerio.load(response.data);
             const results = [];
@@ -849,7 +873,9 @@ async function searchNews(query) {
                 return results;
             }
         } catch (baiduError) {
-            console.error('百度搜索失败:', baiduError.message);
+            if (baiduError && baiduError.message === '百度搜索无响应') {
+                console.error('百度搜索失败:', baiduError.message);
+            }
         }
         
         // 如果都失败了，返回空数组
@@ -867,7 +893,7 @@ async function searchNews(query) {
  */
 async function fetchArticleContent(url) {
     try {
-        const response = await axios.get(url, {
+        const response = await axios.get(url, withIpv4({
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -876,7 +902,7 @@ async function fetchArticleContent(url) {
             },
             timeout: 10000,
             maxRedirects: 5
-        });
+        }));
         
         const $ = cheerio.load(response.data);
         
@@ -1048,7 +1074,7 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 'Referer': 'https://www.google.com/'
             };
             
-            const response = await axios.get(url, {
+            const response = await axios.get(url, withIpv4({
                 headers: headers,
                 timeout: 15000, // 增加到15秒超时
                 maxRedirects: 5,
@@ -1061,7 +1087,7 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 // 设置响应类型
                 responseType: 'text',
                 responseEncoding: 'utf8'
-            });
+            }));
         
             const $ = cheerio.load(response.data, {
                 decodeEntities: false,

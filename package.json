@@ -33,7 +33,7 @@
     "puppeteer": "^25.16.0"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": "24.x"
   },
   "overrides": {
     "proxy-addr": "2.0.8",

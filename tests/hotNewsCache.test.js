@@ -75,6 +75,21 @@ function testStaticCachePolicy() {
     assert.strictEqual(getStaticCacheControl('font.woff2'), LONG_LIVED_CACHE_CONTROL);
 }
 
+function testOutboundPrefersIpv4() {
+    const dns = require('dns');
+    const { preferIpv4, withIpv4 } = require('../lib/outboundNetwork');
+    preferIpv4();
+    if (typeof dns.getDefaultResultOrder === 'function') {
+        assert.strictEqual(dns.getDefaultResultOrder(), 'ipv4first');
+    }
+    const options = withIpv4({ timeout: 5000 });
+    assert.strictEqual(options.family, 4);
+    assert.strictEqual(options.timeout, 5000);
+    assert.strictEqual(options.httpsAgent.options.family, 4);
+    const pkg = require('../package.json');
+    assert.strictEqual(pkg.engines.node, '24.x');
+}
+
 function testVercelKeepsDefaultIad1() {
     const vercel = require('../vercel.json');
     assert.strictEqual(vercel.regions, undefined);
@@ -92,6 +107,7 @@ function run() {
     testPlatformIsolation();
     testTtlConstants();
     testStaticCachePolicy();
+    testOutboundPrefersIpv4();
     testVercelKeepsDefaultIad1();
     console.log('hotNewsCache tests ok');
 }
