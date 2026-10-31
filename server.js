@@ -1,5 +1,7 @@
 // 加载环境变量（必须在其他模块之前）
 require('dotenv').config();
+// 出站 DNS：必须在任何 axios 请求之前固定为 IPv4。
+const { withIpv4 } = require('./lib/outboundNetwork');
 
 const express = require('express');
 const cors = require('cors');
@@ -7,6 +9,8 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
+const { hotNewsCache } = require('./lib/hotNewsCache');
+const { setStaticAssetHeaders } = require('./lib/staticCacheHeaders');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -167,7 +171,8 @@ console.log('基础路径:', BASE_PATH);
 app.use(STATIC_PATH, express.static(path.join(__dirname, 'public'), {
     index: 'index.html',
     extensions: ['html'],
-    maxAge: '1d'
+    maxAge: 0,
+    setHeaders: setStaticAssetHeaders
 }));
 
 // 如果 BASE_PATH 不为空，同时提供根路径的静态文件服务（用于本地开发）
@@ -177,7 +182,8 @@ if (BASE_PATH && BASE_PATH !== '/') {
     // 创建一个静态文件中间件，只处理静态资源
     const staticMiddleware = express.static(path.join(__dirname, 'public'), {
         index: false, // 不提供 index.html
-        maxAge: '1d'
+        maxAge: 0,
+        setHeaders: setStaticAssetHeaders
     });
     
     app.use('/', (req, res, next) => {
@@ -392,20 +398,22 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
 
 // 获取热搜数据的接口
 app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
+    const platform = req.query.platform || 'networkhot';
+    const refresh = req.query.refresh === 'true';
+    // API 本身不走 CDN/浏览器长缓存；新鲜度由进程内 3 分钟 TTL 控制。
+    res.setHeader('Cache-Control', 'private, no-store');
+
     try {
-        const platform = req.query.platform || 'networkhot';
-        const refresh = req.query.refresh === 'true';
-        if (refresh) {
+        if (!refresh) {
+            const cachedData = hotNewsCache.get(platform);
+            if (cachedData) {
+                res.setHeader('X-Hot-News-Cache', 'HIT');
+                return res.json(cachedData);
+            }
+        } else {
             console.log(`强制刷新热搜数据，平台: ${platform}`);
         }
-        // 尝试从缓存获取热搜数据
-        const cacheKey = `hot-news-${platform}`;
-        const cachedData = simpleCache.get(cacheKey);
-        
-        if (cachedData && !refresh) {
-            return res.json(cachedData);
-        }
-        
+
         // 根据平台选择不同的API接口
         let endpoint = '';
         switch(platform) {
@@ -421,16 +429,26 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
             default:
                 endpoint = 'networkhot';
         }
-        
+
         const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
-        
-        const response = await axios.get(apiUrl);
-        // console.log(JSON.stringify(response.data));
-        // 缓存结果，设置15分钟过期（增加缓存时间）
-        simpleCache.set(cacheKey, response.data, 1800);
-        
+        // 5s timeout: fail fast to stale in-process copy instead of hanging the function.
+        // family 4: TianAPI from the Node 26 preview runtime exceeded this budget
+        // while racing IPv6. Production Node 24 completes on IPv4 in about 2s.
+        const response = await axios.get(apiUrl, withIpv4({ timeout: 5000 }));
+        hotNewsCache.set(platform, response.data);
+        res.setHeader('X-Hot-News-Cache', refresh ? 'REFRESH' : 'MISS');
         res.json(response.data);
     } catch (error) {
+        const stale = hotNewsCache.getStale(platform);
+        if (stale) {
+            console.error('获取热搜数据失败，返回过期缓存', {
+                platform,
+                code: error.code || null,
+                status: error.response ? error.response.status : null
+            });
+            res.setHeader('X-Hot-News-Cache', 'STALE');
+            return res.json(stale);
+        }
         console.error('获取热搜数据失败:', error);
         res.status(500).json({ error: '获取热搜数据失败', message: error.message });
     }
@@ -780,19 +798,39 @@ async function searchNews(query) {
         }
         
         // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
+        // Google 密钥过期时会立刻 400，这里是预览实际拿到结果的路径。
+        // Node 26 上这条连接会 socket hang up；对连接重置重试一次，并强制 IPv4。
         try {
             const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-            
-            const response = await axios.get(searchUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Referer': 'https://www.baidu.com/'
-                },
-                timeout: 10000,
-                maxRedirects: 5
-            });
+            const baiduHeaders = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.baidu.com/'
+            };
+            let response;
+            let baiduError;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    response = await axios.get(searchUrl, withIpv4({
+                        headers: baiduHeaders,
+                        timeout: 10000,
+                        maxRedirects: 5
+                    }));
+                    baiduError = null;
+                    break;
+                } catch (error) {
+                    baiduError = error;
+                    const reset = error.code === 'ECONNRESET' || /socket hang up/i.test(error.message || '');
+                    console.error('百度搜索失败:', error.message);
+                    if (!reset || attempt === 1) {
+                        break;
+                    }
+                }
+            }
+            if (baiduError || !response) {
+                throw baiduError || new Error('百度搜索无响应');
+            }
             
             const $ = cheerio.load(response.data);
             const results = [];
@@ -835,7 +873,9 @@ async function searchNews(query) {
                 return results;
             }
         } catch (baiduError) {
-            console.error('百度搜索失败:', baiduError.message);
+            if (baiduError && baiduError.message === '百度搜索无响应') {
+                console.error('百度搜索失败:', baiduError.message);
+            }
         }
         
         // 如果都失败了，返回空数组
@@ -853,7 +893,7 @@ async function searchNews(query) {
  */
 async function fetchArticleContent(url) {
     try {
-        const response = await axios.get(url, {
+        const response = await axios.get(url, withIpv4({
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -862,7 +902,7 @@ async function fetchArticleContent(url) {
             },
             timeout: 10000,
             maxRedirects: 5
-        });
+        }));
         
         const $ = cheerio.load(response.data);
         
@@ -1034,7 +1074,7 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 'Referer': 'https://www.google.com/'
             };
             
-            const response = await axios.get(url, {
+            const response = await axios.get(url, withIpv4({
                 headers: headers,
                 timeout: 15000, // 增加到15秒超时
                 maxRedirects: 5,
@@ -1047,7 +1087,7 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 // 设置响应类型
                 responseType: 'text',
                 responseEncoding: 'utf8'
-            });
+            }));
         
             const $ = cheerio.load(response.data, {
                 decodeEntities: false,
@@ -1633,10 +1673,12 @@ app.get('/favicon.ico', (req, res) => {
     const faviconSvgPath = path.join(__dirname, 'public', 'favicon.svg');
     
     if (fs.existsSync(faviconPath)) {
+        setStaticAssetHeaders(res, faviconPath);
         res.sendFile(faviconPath);
     } else if (fs.existsSync(faviconSvgPath)) {
         // 如果不存在 .ico 文件，提供 .svg 文件
         res.type('image/svg+xml');
+        setStaticAssetHeaders(res, faviconSvgPath);
         res.sendFile(faviconSvgPath);
     } else {
         res.status(204).end(); // 返回 204 No Content
@@ -1650,9 +1692,11 @@ if (BASE_PATH && BASE_PATH !== '/') {
         const faviconSvgPath = path.join(__dirname, 'public', 'favicon.svg');
         
         if (fs.existsSync(faviconPath)) {
+            setStaticAssetHeaders(res, faviconPath);
             res.sendFile(faviconPath);
         } else if (fs.existsSync(faviconSvgPath)) {
             res.type('image/svg+xml');
+            setStaticAssetHeaders(res, faviconSvgPath);
             res.sendFile(faviconSvgPath);
         } else {
             res.status(204).end();
@@ -1669,6 +1713,7 @@ if (BASE_PATH && BASE_PATH !== '/') {
         if (req.params.platform && req.params.platform.startsWith('api')) {
             return res.status(404).send('Not found');
         }
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
     // 根路径重定向到 BASE_PATH
@@ -1689,6 +1734,7 @@ if (BASE_PATH && BASE_PATH !== '/') {
                 return res.status(404).send('Not found');
             }
         }
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
 }
