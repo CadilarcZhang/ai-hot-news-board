@@ -14,9 +14,7 @@ const {
 const { extractBaiduNewsResults, collectHtmlUntilResults } = require('./lib/baiduSerp');
 // 冷启动时先解析并握手 www.baidu.com，第一次搜索复用这条连接。
 primeIpv4('www.baidu.com');
-primeIpv4('news.baidu.com');
 warmHttpsOrigin('www.baidu.com');
-warmHttpsOrigin('news.baidu.com');
 
 const express = require('express');
 const cors = require('cors');
@@ -843,18 +841,15 @@ async function fetchBaiduOnce(query, signal, hooks) {
         }
     };
     try {
-        const newsHost = hooks && hooks.variant === 'news';
-        const searchUrl = newsHost
-            ? `https://news.baidu.com/ns?word=${encodeURIComponent(query)}&tn=news&from=news&cl=2&rn=5&ct=1&ie=utf-8`
-            : `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
+        const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
         const response = await axios.get(searchUrl, withIpv4({
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Referer': newsHost ? 'https://news.baidu.com/' : 'https://www.baidu.com/'
+                'Referer': 'https://www.baidu.com/'
             },
-            timeout: newsHost ? 4000 : BAIDU_SEARCH_TIMEOUT_MS,
+            timeout: BAIDU_SEARCH_TIMEOUT_MS,
             maxRedirects: 5,
             responseType: 'stream',
             signal
@@ -898,12 +893,27 @@ async function searchBaidu(query, signal, onHits) {
         return [];
     }
 
+    // 两条连接只抢首包。先拿到响应头的那条继续读正文，另一条立刻取消，
+    // 避免两份 384KB 页面抢带宽。
+    const controllers = [new AbortController(), new AbortController()];
+    let leader = -1;
+    const claim = (index) => {
+        if (leader !== -1) return;
+        leader = index;
+        controllers.forEach((controller, i) => {
+            if (i !== index) controller.abort();
+        });
+    };
+    const abortBoth = () => controllers.forEach((controller) => controller.abort());
+    if (signal) {
+        signal.addEventListener('abort', abortBoth, { once: true });
+    }
+
     let emitted = false;
-    let via = 'news';
     const forwardHits = (results) => {
         if (emitted || !results || results.length === 0 || typeof onHits !== 'function') return;
         emitted = true;
-        console.log(`百度首条可用来源 ${Date.now() - started}ms 条数 ${results.length} via ${via}`);
+        console.log(`百度首条可用来源 ${Date.now() - started}ms 条数 ${results.length}`);
         try {
             onHits(results);
         } catch (error) {
@@ -911,22 +921,26 @@ async function searchBaidu(query, signal, onHits) {
         }
     };
 
-    // 桌面 /s?tn=news 的命中在大约 375KB 处。新闻站页面更短，同一套选择器能更早看到链接。
-    let pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits, variant: 'news' });
-    if ((!pack || pack.results.length === 0) && isConnectionReset(pack && pack.error) && !(signal && signal.aborted)) {
-        pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits, variant: 'news' });
+    const packs = await Promise.all(controllers.map((controller, index) => {
+        return fetchBaiduOnce(query, controller.signal, {
+            onHeaders: () => claim(index),
+            onResults: forwardHits
+        });
+    }));
+
+    let pack = null;
+    if (leader >= 0 && packs[leader] && packs[leader].results.length > 0) {
+        pack = packs[leader];
+    } else {
+        pack = packs.find((item) => item && item.results.length > 0) || packs[Math.max(leader, 0)] || packs[0];
     }
-    if ((!pack || pack.results.length === 0) && !(signal && signal.aborted)) {
-        console.log(`新闻站无结果 ${pack ? pack.totalMs : 0}ms bytes ${pack ? pack.bytes : 0}，改走桌面`);
-        via = 'www';
-        pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits, variant: 'www' });
-        if ((!pack || pack.results.length === 0) && isConnectionReset(pack && pack.error) && !(signal && signal.aborted)) {
-            pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits, variant: 'www' });
-        }
+
+    if ((!pack || pack.results.length === 0) && isConnectionReset(pack && pack.error) && !(signal && signal.aborted)) {
+        pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits });
     }
 
     const chosen = pack || { results: [], headersMs: 0, bytes: 0, early: false, firstHitBytes: 0 };
-    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${chosen.results.length} headers ${chosen.headersMs || 0}ms bytes ${chosen.bytes || 0} firstHit ${chosen.firstHitBytes || 0} early ${chosen.early ? 1 : 0} via ${via}`);
+    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${chosen.results.length} headers ${chosen.headersMs || 0}ms bytes ${chosen.bytes || 0} firstHit ${chosen.firstHitBytes || 0} early ${chosen.early ? 1 : 0} race ${leader >= 0 ? 1 : 0}`);
     if (chosen.results.length > 0) {
         console.log('百度搜索结果: ' + JSON.stringify(chosen.results));
         if (!emitted) forwardHits(chosen.results);
