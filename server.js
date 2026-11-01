@@ -2,7 +2,14 @@
 require('dotenv').config();
 // 出站 DNS：必须在任何 axios 请求之前固定为 IPv4。
 const { withIpv4 } = require('./lib/outboundNetwork');
-const { toSourceList, sameSources, isConnectionReset } = require('./lib/searchSources');
+const {
+    toSourceList,
+    sameSources,
+    isConnectionReset,
+    isAbortError,
+    collectSettled,
+    FETCH_CANDIDATE_LIMIT
+} = require('./lib/searchSources');
 
 const express = require('express');
 const cors = require('cors');
@@ -906,7 +913,7 @@ async function searchNews(query) {
  * @param {string} url - 网页URL
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContent(url) {
+async function fetchArticleContent(url, signal) {
     try {
         const response = await axios.get(url, withIpv4({
             headers: {
@@ -916,7 +923,8 @@ async function fetchArticleContent(url) {
                 'Referer': 'https://www.baidu.com/'
             },
             timeout: ARTICLE_FETCH_TIMEOUT_MS,
-            maxRedirects: 5
+            maxRedirects: 5,
+            signal
         }));
         
         const $ = cheerio.load(response.data);
@@ -976,7 +984,9 @@ async function fetchArticleContent(url) {
         
         return content;
     } catch (error) {
-        console.error(`抓取网页内容失败 (${url}):`, error.message);
+        if (!isAbortError(error, signal)) {
+            console.error(`抓取网页内容失败 (${url}):`, error.message);
+        }
         return '';
     }
 }
@@ -994,10 +1004,10 @@ async function fetchMultipleArticles(query, presetResults) {
             return { content: null, articles: [] };
     }
         
-        // 前 3 条并行抓取。串行再加 1 秒间隔会把 sources 事件拖到正文全部结束。
-        const picked = searchResults.slice(0, 3);
-        const fetched = await Promise.all(picked.map(async (result) => {
-            const content = await fetchArticleContent(result.link);
+        // 最多试 5 条，并行。凑够正文后不再等最慢的失败请求。
+        const picked = searchResults.slice(0, FETCH_CANDIDATE_LIMIT);
+        const articles = await collectSettled(picked, async (result, index, signal) => {
+            const content = await fetchArticleContent(result.link, signal);
             console.log("网页抓取文章内容: " + content);
             if (content && content.length > 200) {
                 return {
@@ -1007,8 +1017,7 @@ async function fetchMultipleArticles(query, presetResults) {
                 };
             }
             return null;
-        }));
-        const articles = fetched.filter(Boolean);
+        });
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1045,7 +1054,7 @@ async function fetchMultipleArticles(query, presetResults) {
  * @param {number} retries - 重试次数，默认2次
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContentWithRetry(url, retries = 1) {
+async function fetchArticleContentWithRetry(url, retries = 1, signal) {
     // 验证和清理URL
     if (!url || !url.startsWith('http')) {
         console.error(`无效的URL: ${url}`);
@@ -1094,7 +1103,8 @@ async function fetchArticleContentWithRetry(url, retries = 1) {
                 decompress: true,
                 // 设置响应类型
                 responseType: 'text',
-                responseEncoding: 'utf8'
+                responseEncoding: 'utf8',
+                signal
             }));
         
             const $ = cheerio.load(response.data, {
@@ -1192,6 +1202,9 @@ async function fetchArticleContentWithRetry(url, retries = 1) {
             return content;
             
         } catch (error) {
+            if (isAbortError(error, signal)) {
+                return '';
+            }
             const isLastAttempt = attempt === retries || !isConnectionReset(error);
             const errorMsg = error.response 
                 ? `HTTP ${error.response.status}: ${error.response.statusText}`
@@ -1221,10 +1234,10 @@ async function fetchMultipleArticlesWithRetry(query, presetResults) {
             return { content: null, articles: [] };
         }
         
-        const picked = searchResults.slice(0, 3);
-        const fetched = await Promise.all(picked.map(async (result, index) => {
+        const picked = searchResults.slice(0, FETCH_CANDIDATE_LIMIT);
+        const articles = await collectSettled(picked, async (result, index, signal) => {
             console.log(`正在抓取 [${index + 1}/${picked.length}]: ${result.title}`);
-            const content = await fetchArticleContentWithRetry(result.link, 1);
+            const content = await fetchArticleContentWithRetry(result.link, 1, signal);
             
             if (content && content.length > 200) {
                 return {
@@ -1235,8 +1248,7 @@ async function fetchMultipleArticlesWithRetry(query, presetResults) {
             }
             console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
             return null;
-        }));
-        const articles = fetched.filter(Boolean);
+        });
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1381,7 +1393,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         const searchStarted = Date.now();
         const searchResults = await searchNews(title);
         console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length}`);
-        const earlySources = toSourceList(searchResults);
+        const earlySources = toSourceList(searchResults, FETCH_CANDIDATE_LIMIT);
         if (earlySources.length > 0) {
             safeWrite(`data: ${JSON.stringify({
                 type: 'sources',

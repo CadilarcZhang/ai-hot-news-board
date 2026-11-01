@@ -5,7 +5,10 @@ const {
     toSourceList,
     sameSources,
     isConnectionReset,
-    SEARCH_SOURCE_LIMIT
+    createFetchBudget,
+    SEARCH_SOURCE_LIMIT,
+    FETCH_CANDIDATE_LIMIT,
+    MAX_ARTICLES
 } = require('../lib/searchSources');
 
 function testToSourceListCapsAndSkipsBadLinks() {
@@ -30,6 +33,21 @@ function testSameSources() {
     assert.strictEqual(sameSources(left, [{ title: 'b', link: 'https://example.com/other' }]), false);
 }
 
+function testCandidateLimitCoversFourthHit() {
+    assert.strictEqual(FETCH_CANDIDATE_LIMIT, 5);
+    assert.strictEqual(MAX_ARTICLES, 3);
+    assert.ok(FETCH_CANDIDATE_LIMIT > SEARCH_SOURCE_LIMIT);
+}
+
+function testBudgetAbortsWhenFull() {
+    const budget = createFetchBudget(5000, 2);
+    budget.note({ title: 'a' });
+    assert.strictEqual(budget.signal.aborted, false);
+    budget.note({ title: 'b' });
+    assert.strictEqual(budget.signal.aborted, true);
+    budget.clear();
+}
+
 function testConnectionReset() {
     assert.strictEqual(isConnectionReset({ code: 'ECONNRESET' }), true);
     assert.strictEqual(isConnectionReset({ message: 'socket hang up' }), true);
@@ -40,6 +58,8 @@ function testConnectionReset() {
 function run() {
     testToSourceListCapsAndSkipsBadLinks();
     testSameSources();
+    testCandidateLimitCoversFourthHit();
+    testBudgetAbortsWhenFull();
     testConnectionReset();
     console.log('searchSources tests ok');
 }
