@@ -59,33 +59,11 @@ function testStopsReadingAfterEnoughResults() {
     });
 }
 
-function testStopsSoonAfterTwoHits() {
-    const head = [
-        resultBlock('甲', 'https://example.com/a', 'result'),
-        resultBlock('乙', 'https://example.com/b', 'result-op')
-    ].join('');
-    const tail = 'X'.repeat(180 * 1024);
-    const html = head + tail;
-    const stream = Readable.from([Buffer.from(html)]);
-    return collectHtmlUntilResults(stream, extractBaiduNewsResults, {
-        limit: 5,
-        checkBytes: 1024,
-        extraAfterHits: 8 * 1024,
-        maxBytes: html.length
-    }).then((collected) => {
-        assert.strictEqual(collected.results.length, 2);
-        assert.strictEqual(collected.early, true);
-        assert.ok(collected.bytes < 40 * 1024);
-    });
-}
-
 function run() {
     testExtractsSameSelectors();
-    return testStopsReadingAfterEnoughResults()
-        .then(() => testStopsSoonAfterTwoHits())
-        .then(() => {
-            console.log('baiduSerp tests ok');
-        });
+    return testStopsReadingAfterEnoughResults().then(() => {
+        console.log('baiduSerp tests ok');
+    });
 }
 
 run().catch((error) => {

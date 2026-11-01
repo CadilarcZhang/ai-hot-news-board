@@ -14,9 +14,7 @@ const {
 const { extractBaiduNewsResults, collectHtmlUntilResults } = require('./lib/baiduSerp');
 // 冷启动时先解析并握手 www.baidu.com，第一次搜索复用这条连接。
 primeIpv4('www.baidu.com');
-primeIpv4('m.baidu.com');
 warmHttpsOrigin('www.baidu.com');
-warmHttpsOrigin('m.baidu.com');
 
 const express = require('express');
 const cors = require('cors');
@@ -768,9 +766,8 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 const BAIDU_SEARCH_TIMEOUT_MS = 7000;
-// 桌面页结果经常在 HTML 后部。移动页和桌面页同时请求，谁先解析出命中用谁。
-// 移动页走另一台主机，不和 www 抢同一条连接。
-const BAIDU_HEDGE_AFTER_MS = 0;
+// 第一条超过这个时间还没返回时，再发一条相同检索。一开始就打两次会抢带宽。
+const BAIDU_HEDGE_AFTER_MS = 1000;
 const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
 
@@ -823,22 +820,17 @@ async function searchGoogle(query, apiKey, engineId, signal) {
     }
 }
 
-async function fetchBaiduOnce(query, signal, variant) {
+async function fetchBaiduOnce(query, signal) {
     const started = Date.now();
-    const empty = { results: [], error: null, headersMs: 0, totalMs: 0, bytes: 0, early: false, variant: variant || 'www' };
-    const mobile = variant === 'mobile';
+    const empty = { results: [], error: null, headersMs: 0, totalMs: 0, bytes: 0, early: false };
     try {
-        const searchUrl = mobile
-            ? `https://m.baidu.com/s?word=${encodeURIComponent(query)}&tn=news`
-            : `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
+        const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
         const response = await axios.get(searchUrl, withIpv4({
             headers: {
-                'User-Agent': mobile
-                    ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
-                    : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Referer': mobile ? 'https://m.baidu.com/' : 'https://www.baidu.com/'
+                'Referer': 'https://www.baidu.com/'
             },
             timeout: BAIDU_SEARCH_TIMEOUT_MS,
             maxRedirects: 5,
@@ -853,9 +845,7 @@ async function fetchBaiduOnce(query, signal, variant) {
             headersMs,
             totalMs: Date.now() - started,
             bytes: collected.bytes,
-            early: collected.early,
-            firstHitBytes: collected.firstHitBytes || 0,
-            variant: mobile ? 'mobile' : 'www'
+            early: collected.early
         };
     } catch (error) {
         if (!isAbortError(error, signal)) {
@@ -863,8 +853,7 @@ async function fetchBaiduOnce(query, signal, variant) {
         }
         return Object.assign({}, empty, {
             error,
-            totalMs: Date.now() - started,
-            variant: mobile ? 'mobile' : 'www'
+            totalMs: Date.now() - started
         });
     }
 }
@@ -894,7 +883,7 @@ async function searchBaidu(query, signal) {
             return;
         }
         hedgeController = new AbortController();
-        fetchBaiduOnce(query, hedgeController.signal, 'mobile').then(resolveHedge);
+        fetchBaiduOnce(query, hedgeController.signal).then(resolveHedge);
     };
     let hedgeTimer = null;
     if (BAIDU_HEDGE_AFTER_MS <= 0) {
@@ -949,7 +938,7 @@ async function searchBaidu(query, signal) {
     });
 
     const pack = winner.pack || { results: [], headersMs: 0, bytes: 0, early: false };
-    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${pack.results.length} headers ${pack.headersMs || 0}ms bytes ${pack.bytes || 0} firstHit ${pack.firstHitBytes || 0} early ${pack.early ? 1 : 0} hedge ${winner.hedged ? 1 : 0} via ${pack.variant || 'www'}`);
+    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${pack.results.length} headers ${pack.headersMs || 0}ms bytes ${pack.bytes || 0} early ${pack.early ? 1 : 0} hedge ${winner.hedged ? 1 : 0}`);
     if (pack.results.length > 0) {
         console.log('百度搜索结果: ' + JSON.stringify(pack.results));
     }
