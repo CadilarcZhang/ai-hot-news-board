@@ -766,8 +766,9 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 const BAIDU_SEARCH_TIMEOUT_MS = 7000;
-// 首包超过这个时间才再发一条相同检索，避免每次搜索都打两次百度。
-const BAIDU_HEDGE_AFTER_MS = 1000;
+// 两条相同检索同时发出，谁先解析出结果用谁。
+// 冷请求里第一条经常在首包后还要读完一大段 HTML，第二条往往更早结束。
+const BAIDU_HEDGE_AFTER_MS = 0;
 const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
 
@@ -885,9 +886,14 @@ async function searchBaidu(query, signal) {
         hedgeController = new AbortController();
         fetchBaiduOnce(query, hedgeController.signal).then(resolveHedge);
     };
-    const hedgeTimer = setTimeout(startHedge, BAIDU_HEDGE_AFTER_MS);
-    if (typeof hedgeTimer.unref === 'function') {
-        hedgeTimer.unref();
+    let hedgeTimer = null;
+    if (BAIDU_HEDGE_AFTER_MS <= 0) {
+        startHedge();
+    } else {
+        hedgeTimer = setTimeout(startHedge, BAIDU_HEDGE_AFTER_MS);
+        if (typeof hedgeTimer.unref === 'function') {
+            hedgeTimer.unref();
+        }
     }
 
     const primaryPromise = fetchBaiduOnce(query, primaryController.signal);
