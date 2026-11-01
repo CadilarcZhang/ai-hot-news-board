@@ -766,8 +766,6 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 const BAIDU_SEARCH_TIMEOUT_MS = 7000;
-// 第一条超过这个时间还没返回时，再发一条相同检索。一开始就打两次会抢带宽。
-const BAIDU_HEDGE_AFTER_MS = 1000;
 const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
 
@@ -820,9 +818,28 @@ async function searchGoogle(query, apiKey, engineId, signal) {
     }
 }
 
-async function fetchBaiduOnce(query, signal) {
+async function fetchBaiduOnce(query, signal, hooks) {
     const started = Date.now();
-    const empty = { results: [], error: null, headersMs: 0, totalMs: 0, bytes: 0, early: false };
+    const empty = {
+        results: [],
+        error: null,
+        headersMs: 0,
+        totalMs: 0,
+        bytes: 0,
+        early: false,
+        firstHitBytes: 0
+    };
+    const onHeaders = hooks && hooks.onHeaders;
+    const onResults = hooks && hooks.onResults;
+    const dropBody = (response) => {
+        if (!response || !response.data) return;
+        response.data.on('error', () => {});
+        try {
+            response.data.destroy();
+        } catch (error) {
+            // 连接已经结束。
+        }
+    };
     try {
         const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
         const response = await axios.get(searchUrl, withIpv4({
@@ -837,15 +854,27 @@ async function fetchBaiduOnce(query, signal) {
             responseType: 'stream',
             signal
         }));
+        if (signal && signal.aborted) {
+            dropBody(response);
+            return Object.assign({}, empty, { totalMs: Date.now() - started });
+        }
         const headersMs = Date.now() - started;
-        const collected = await collectHtmlUntilResults(response.data, extractBaiduNewsResults);
+        if (onHeaders) onHeaders();
+        if (signal && signal.aborted) {
+            dropBody(response);
+            return Object.assign({}, empty, { headersMs, totalMs: Date.now() - started });
+        }
+        const collected = await collectHtmlUntilResults(response.data, extractBaiduNewsResults, {
+            onResults
+        });
         return {
             results: collected.results,
             error: null,
             headersMs,
             totalMs: Date.now() - started,
             bytes: collected.bytes,
-            early: collected.early
+            early: collected.early,
+            firstHitBytes: collected.firstHitBytes || 0
         };
     } catch (error) {
         if (!isAbortError(error, signal)) {
@@ -858,94 +887,68 @@ async function fetchBaiduOnce(query, signal) {
     }
 }
 
-async function searchBaidu(query, signal) {
+async function searchBaidu(query, signal, onHits) {
     const started = Date.now();
     if (signal && signal.aborted) {
         return [];
     }
 
-    const primaryController = new AbortController();
-    let hedgeController = null;
-    const abortInFlight = () => {
-        primaryController.abort();
-        if (hedgeController) hedgeController.abort();
+    // 两条连接只抢首包。先拿到响应头的那条继续读正文，另一条立刻取消，
+    // 避免两份 384KB 页面抢带宽。
+    const controllers = [new AbortController(), new AbortController()];
+    let leader = -1;
+    const claim = (index) => {
+        if (leader !== -1) return;
+        leader = index;
+        controllers.forEach((controller, i) => {
+            if (i !== index) controller.abort();
+        });
     };
+    const abortBoth = () => controllers.forEach((controller) => controller.abort());
     if (signal) {
-        signal.addEventListener('abort', abortInFlight, { once: true });
+        signal.addEventListener('abort', abortBoth, { once: true });
     }
 
-    let resolveHedge;
-    const hedgePromise = new Promise((resolve) => {
-        resolveHedge = resolve;
-    });
-    const startHedge = () => {
-        if (hedgeController || (signal && signal.aborted)) {
-            return;
+    let emitted = false;
+    const forwardHits = (results) => {
+        if (emitted || !results || results.length === 0 || typeof onHits !== 'function') return;
+        emitted = true;
+        console.log(`百度首条可用来源 ${Date.now() - started}ms 条数 ${results.length}`);
+        try {
+            onHits(results);
+        } catch (error) {
+            // SSE 写入失败不打断检索。
         }
-        hedgeController = new AbortController();
-        fetchBaiduOnce(query, hedgeController.signal).then(resolveHedge);
     };
-    let hedgeTimer = null;
-    if (BAIDU_HEDGE_AFTER_MS <= 0) {
-        startHedge();
+
+    const packs = await Promise.all(controllers.map((controller, index) => {
+        return fetchBaiduOnce(query, controller.signal, {
+            onHeaders: () => claim(index),
+            onResults: forwardHits
+        });
+    }));
+
+    let pack = null;
+    if (leader >= 0 && packs[leader] && packs[leader].results.length > 0) {
+        pack = packs[leader];
     } else {
-        hedgeTimer = setTimeout(startHedge, BAIDU_HEDGE_AFTER_MS);
-        if (typeof hedgeTimer.unref === 'function') {
-            hedgeTimer.unref();
-        }
+        pack = packs.find((item) => item && item.results.length > 0) || packs[Math.max(leader, 0)] || packs[0];
     }
 
-    const primaryPromise = fetchBaiduOnce(query, primaryController.signal);
-    const winner = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (pack, hedged) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(hedgeTimer);
-            abortInFlight();
-            resolveHedge(null);
-            resolve({ pack, hedged });
-        };
-
-        primaryPromise.then((pack) => {
-            if (settled) return;
-            if (pack.results.length > 0) {
-                finish(pack, false);
-                return;
-            }
-            if (hedgeController || isConnectionReset(pack.error)) {
-                if (isConnectionReset(pack.error)) {
-                    clearTimeout(hedgeTimer);
-                    startHedge();
-                }
-                hedgePromise.then((hedgePack) => {
-                    if (!hedgePack || hedgePack.results.length === 0) {
-                        finish(pack, false);
-                        return;
-                    }
-                    finish(hedgePack, true);
-                });
-                return;
-            }
-            clearTimeout(hedgeTimer);
-            finish(pack, false);
-        });
-
-        hedgePromise.then((pack) => {
-            if (settled || !pack || pack.results.length === 0) return;
-            finish(pack, true);
-        });
-    });
-
-    const pack = winner.pack || { results: [], headersMs: 0, bytes: 0, early: false };
-    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${pack.results.length} headers ${pack.headersMs || 0}ms bytes ${pack.bytes || 0} early ${pack.early ? 1 : 0} hedge ${winner.hedged ? 1 : 0}`);
-    if (pack.results.length > 0) {
-        console.log('百度搜索结果: ' + JSON.stringify(pack.results));
+    if ((!pack || pack.results.length === 0) && isConnectionReset(pack && pack.error) && !(signal && signal.aborted)) {
+        pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits });
     }
-    return pack.results;
+
+    const chosen = pack || { results: [], headersMs: 0, bytes: 0, early: false, firstHitBytes: 0 };
+    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${chosen.results.length} headers ${chosen.headersMs || 0}ms bytes ${chosen.bytes || 0} firstHit ${chosen.firstHitBytes || 0} early ${chosen.early ? 1 : 0} race ${leader >= 0 ? 1 : 0}`);
+    if (chosen.results.length > 0) {
+        console.log('百度搜索结果: ' + JSON.stringify(chosen.results));
+        if (!emitted) forwardHits(chosen.results);
+    }
+    return chosen.results;
 }
 
-async function searchNews(query) {
+async function searchNews(query, onHits) {
     try {
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
@@ -956,7 +959,7 @@ async function searchNews(query) {
         const baiduAbort = new AbortController();
         let baiduDone = false;
         let baiduResults = [];
-        const baiduTask = searchBaidu(query, baiduAbort.signal).then((results) => {
+        const baiduTask = searchBaidu(query, baiduAbort.signal, onHits).then((results) => {
             baiduDone = true;
             baiduResults = results || [];
             return baiduResults;
@@ -1448,6 +1451,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 type: 'sources',
                 articles: cachedArticles 
             })}\n\n`);
+            safeWrite(`: flush${' '.repeat(4096)}\n\n`);
         }
         
         // 分段发送缓存内容
@@ -1493,31 +1497,39 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        // 步骤2: 先出搜索命中，再并行抓正文。sources 不再等全部正文下载完。
+        // 步骤2: 搜索页解析出第一条就写 sources，不等正文，也不等整页下完。
         const searchStarted = Date.now();
-        const searchResults = await searchNews(title);
-        console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length}`);
-        const earlySources = toSourceList(searchResults, FETCH_CANDIDATE_LIMIT);
-        if (earlySources.length > 0) {
+        let shownSources = [];
+        const publishSources = (results) => {
+            const list = toSourceList(results, FETCH_CANDIDATE_LIMIT);
+            if (list.length === 0 || sameSources(shownSources, list)) return;
+            shownSources = list;
             safeWrite(`data: ${JSON.stringify({
                 type: 'sources',
-                articles: earlySources
+                articles: list
             })}\n\n`);
             safeWrite(`: flush${' '.repeat(4096)}\n\n`);
-            await new Promise((resolve) => setImmediate(resolve));
-        }
+        };
+        const searchResults = await searchNews(title, publishSources);
+        publishSources(searchResults);
+        console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length} sources=${shownSources.length}`);
+        await new Promise((resolve) => setImmediate(resolve));
         articlesData = GOOGLE_SEARCH_SWITCH
-            ? await fetchMultipleArticlesWithRetry(title, earlySources)
-            : await fetchMultipleArticles(title, earlySources);
+            ? await fetchMultipleArticlesWithRetry(title, shownSources)
+            : await fetchMultipleArticles(title, shownSources);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
         const finalSources = articlesData.articles || [];
-        if (finalSources.length > 0 && !sameSources(earlySources, finalSources)) {
-            safeWrite(`data: ${JSON.stringify({ 
-                type: 'sources',
-                articles: finalSources 
-            })}\n\n`);
+        if (finalSources.length > 0) {
+            publishSources(finalSources);
         }
+        const persistSearchCache = (content) => {
+            if (!content || !String(content).trim()) return;
+            simpleCache.set(cacheKey, content, 3600);
+            if (shownSources.length > 0) {
+                simpleCache.set(cacheArticlesKey, shownSources, 3600);
+            }
+        };
         
         const articlesContent = articlesData.content;
         if (!articlesContent || articlesContent.length < 200) {
@@ -1603,13 +1615,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                     const data = line.substring(6).trim();
                     
                     if (data === '[DONE]') {
-                        if (fullContent.trim().length > 0) {
-                            simpleCache.set(cacheKey, fullContent, 3600);
-                            // 同时缓存文章链接信息
-                            if (articlesData.articles && articlesData.articles.length > 0) {
-                                simpleCache.set(cacheArticlesKey, articlesData.articles, 3600);
-                            }
-                        }
+                        persistSearchCache(fullContent);
                         safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                         safeEnd();
                         return;
@@ -1643,9 +1649,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                     if (line.startsWith('data: ')) {
                         const data = line.substring(6).trim();
                         if (data === '[DONE]') {
-                            if (fullContent.trim().length > 0) {
-                                simpleCache.set(cacheKey, fullContent, 3600);
-                            }
+                            persistSearchCache(fullContent);
                             break;
                         }
                         try {
@@ -1668,13 +1672,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             }
             
             if (!isResponseEnded) {
-                if (fullContent.trim().length > 0) {
-                    simpleCache.set(cacheKey, fullContent, 3600);
-                    // 同时缓存文章链接信息
-                    if (articlesData.articles && articlesData.articles.length > 0) {
-                        simpleCache.set(cacheArticlesKey, articlesData.articles, 3600);
-                    }
-                }
+                persistSearchCache(fullContent);
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                 safeEnd();
             }

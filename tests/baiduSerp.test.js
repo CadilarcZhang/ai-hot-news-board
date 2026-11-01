@@ -5,7 +5,8 @@ const { Readable } = require('stream');
 const {
     extractBaiduNewsResults,
     collectHtmlUntilResults,
-    countResultMarkers
+    countResultMarkers,
+    stripScriptsAndStyles
 } = require('../lib/baiduSerp');
 
 function resultBlock(title, href, extraClass) {
@@ -59,11 +60,48 @@ function testStopsReadingAfterEnoughResults() {
     });
 }
 
+function testScriptTextDoesNotHideLaterResults() {
+    const fake = '<script>' + 'class="result" '.repeat(400) + '</script>';
+    const head = fake + [
+        resultBlock('甲', 'https://example.com/a', 'result'),
+        resultBlock('乙', 'https://example.com/b', 'result'),
+        resultBlock('丙', 'https://example.com/c', 'result-op'),
+        resultBlock('丁', 'https://example.com/d', 'result'),
+        resultBlock('戊', 'https://example.com/e', 'c-result')
+    ].join('');
+    const tail = 'TAIL'.repeat(4000);
+    const html = head + tail;
+    assert.ok(countResultMarkers(fake) > 0);
+    assert.strictEqual(countResultMarkers(stripScriptsAndStyles(fake)), 0);
+    const seen = [];
+    const stream = Readable.from([
+        Buffer.from(fake),
+        Buffer.from(head.slice(fake.length)),
+        Buffer.from(tail)
+    ]);
+    return collectHtmlUntilResults(stream, extractBaiduNewsResults, {
+        limit: 5,
+        checkBytes: 128,
+        maxBytes: html.length,
+        onResults: (results) => seen.push(results.map((item) => item.title).join(','))
+    }).then((collected) => {
+        assert.deepStrictEqual(collected.results.map((item) => item.title), ['甲', '乙', '丙', '丁', '戊']);
+        assert.ok(seen.length >= 1);
+        assert.ok(seen[0].includes('甲'));
+        assert.strictEqual(collected.early, true);
+        assert.ok(!collected.html.includes('TAILTAIL'));
+        assert.ok(collected.firstHitBytes > 0);
+        assert.ok(collected.firstHitBytes < html.length);
+    });
+}
+
 function run() {
     testExtractsSameSelectors();
-    return testStopsReadingAfterEnoughResults().then(() => {
-        console.log('baiduSerp tests ok');
-    });
+    return testStopsReadingAfterEnoughResults()
+        .then(() => testScriptTextDoesNotHideLaterResults())
+        .then(() => {
+            console.log('baiduSerp tests ok');
+        });
 }
 
 run().catch((error) => {
