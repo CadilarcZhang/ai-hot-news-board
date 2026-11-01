@@ -766,9 +766,9 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 const BAIDU_SEARCH_TIMEOUT_MS = 7000;
-// 两条相同检索同时发出，谁先解析出结果用谁。
-// 冷请求里第一条经常在首包后还要读完一大段 HTML，第二条往往更早结束。
-const BAIDU_HEDGE_AFTER_MS = 0;
+// 首包超过这个时间，说明第一条可能卡住了，再平行发一条。
+// 一开始就打两次会抢同一条带宽，把已经很快的那次拖慢。
+const BAIDU_HEDGE_AFTER_MS = 1200;
 const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
 
@@ -846,7 +846,8 @@ async function fetchBaiduOnce(query, signal) {
             headersMs,
             totalMs: Date.now() - started,
             bytes: collected.bytes,
-            early: collected.early
+            early: collected.early,
+            firstHitBytes: collected.firstHitBytes || 0
         };
     } catch (error) {
         if (!isAbortError(error, signal)) {
@@ -939,7 +940,7 @@ async function searchBaidu(query, signal) {
     });
 
     const pack = winner.pack || { results: [], headersMs: 0, bytes: 0, early: false };
-    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${pack.results.length} headers ${pack.headersMs || 0}ms bytes ${pack.bytes || 0} early ${pack.early ? 1 : 0} hedge ${winner.hedged ? 1 : 0}`);
+    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${pack.results.length} headers ${pack.headersMs || 0}ms bytes ${pack.bytes || 0} firstHit ${pack.firstHitBytes || 0} early ${pack.early ? 1 : 0} hedge ${winner.hedged ? 1 : 0}`);
     if (pack.results.length > 0) {
         console.log('百度搜索结果: ' + JSON.stringify(pack.results));
     }
