@@ -1,0 +1,16 @@
+# 第一次百度搜索为什么慢
+
+预览函数在 `iad1`。2026-11-01 对现网部署 `dpl_o1HEht1Hz3jPz88wEcvP5szutES3` 的测量：
+
+- 百度结果日志大约在请求开始后 **2.7s**（含一次失败的 Google Custom Search）。
+- 客户端要到 **15s 左右** 才收到第一条 `sources`。这段时间花在正文抓取，不是花在百度检索本身。
+
+`generate-with-search` 以前把 `sources` 放在全部正文抓完之后。Google 开关打开时走 `fetchMultipleArticlesWithRetry`：每批最多 2 篇、批间等待 1.5s、正文太短还会按 1s/2s 再下两次同一页面。百科类页面经常是空正文，有用的第三条要等前面的重试结束才开始。
+
+## 这次改了什么
+
+选择器和「Google 有结果就用 Google，否则用百度」没有改。响应里的 `sources` 仍是 `{ title, link }`。
+
+- Google 与百度同时发出。Google 先返回非空结果就用 Google，并中止百度；否则用已经在飞的百度结果。Google 超时 5s，百度超时 7s。连接重置仍立刻重试一次，读超时不重试。
+- 出站 Agent 改为 IPv4 + `keepAlive`，同一实例复用连接。
+- 搜到结果后立刻写 `sources`，再并行抓最多 3 篇正文（8s 超时）。正文太短不再对同一 URL 空等重试。抓完若可用来源和先发出的列表不同，再写一次 `sources`，前端会换成真正读到正文的链接。

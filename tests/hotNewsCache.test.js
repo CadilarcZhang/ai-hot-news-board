@@ -86,6 +86,8 @@ function testOutboundPrefersIpv4() {
     assert.strictEqual(options.family, 4);
     assert.strictEqual(options.timeout, 5000);
     assert.strictEqual(options.httpsAgent.options.family, 4);
+    assert.strictEqual(options.httpsAgent.options.keepAlive, true);
+    assert.strictEqual(options.httpAgent.options.keepAlive, true);
     const pkg = require('../package.json');
     assert.strictEqual(pkg.engines.node, '24.x');
 }

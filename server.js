@@ -2,6 +2,7 @@
 require('dotenv').config();
 // 出站 DNS：必须在任何 axios 请求之前固定为 IPv4。
 const { withIpv4 } = require('./lib/outboundNetwork');
+const { toSourceList, sameSources, isConnectionReset } = require('./lib/searchSources');
 
 const express = require('express');
 const cors = require('cors');
@@ -742,144 +743,158 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
+const BAIDU_SEARCH_TIMEOUT_MS = 7000;
+const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
+const ARTICLE_FETCH_TIMEOUT_MS = 8000;
+
+/**
+ * Google 优先。密钥过期时不等它结束再连百度：两条请求同时发出，
+ * Google 有结果就用 Google，否则用已经在飞的百度结果。
+ */
+async function searchGoogle(query, apiKey, engineId) {
+    try {
+        const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
+        const referer = process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : (process.env.SITE_URL || 'https://news.zxt.net.cn');
+
+        console.log('使用Google Custom Search API搜索:', query);
+        const googleResponse = await axios.get(googleUrl, withIpv4({
+            timeout: GOOGLE_SEARCH_TIMEOUT_MS,
+            headers: {
+                'Accept': 'application/json',
+                'Referer': referer,
+                'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
+            }
+        }));
+
+        if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
+            console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
+            return googleResponse.data.items.map(item => ({
+                title: item.title,
+                link: item.link,
+                snippet: item.snippet || item.htmlSnippet || ''
+            }));
+        }
+        console.log('Google搜索返回空结果');
+        return [];
+    } catch (googleError) {
+        if (googleError.response) {
+            console.error('Google搜索API错误:', {
+                status: googleError.response.status,
+                statusText: googleError.response.statusText,
+                data: googleError.response.data
+            });
+        } else {
+            console.error('Google搜索失败，尝试备用方法:', googleError.message);
+        }
+        return [];
+    }
+}
+
+async function searchBaidu(query, signal) {
+    const started = Date.now();
+    try {
+        const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
+        const baiduHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.baidu.com/'
+        };
+        let response;
+        let baiduError;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                response = await axios.get(searchUrl, withIpv4({
+                    headers: baiduHeaders,
+                    timeout: BAIDU_SEARCH_TIMEOUT_MS,
+                    maxRedirects: 5,
+                    signal
+                }));
+                baiduError = null;
+                break;
+            } catch (error) {
+                baiduError = error;
+                if (signal && signal.aborted) {
+                    break;
+                }
+                console.error('百度搜索失败:', error.message);
+                // 只对连接重置立刻重试。读超时再试一次会把第一次搜索拉长一倍。
+                if (!isConnectionReset(error) || attempt === 1) {
+                    break;
+                }
+            }
+        }
+        if (signal && signal.aborted) {
+            return [];
+        }
+        if (baiduError || !response) {
+            throw baiduError || new Error('百度搜索无响应');
+        }
+
+        const $ = cheerio.load(response.data);
+        const results = [];
+
+        $('.result, .c-result, .result-op').each((index, element) => {
+            if (results.length >= 5) return false;
+
+            const $el = $(element);
+            const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
+            let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
+            const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
+
+            if (title && link) {
+                if (link.startsWith('/link?url=')) {
+                    try {
+                        const urlMatch = link.match(/url=([^&]+)/);
+                        if (urlMatch) {
+                            link = decodeURIComponent(urlMatch[1]);
+                        }
+                    } catch (e) {
+                        return;
+                    }
+                }
+
+                if (link && link.startsWith('http')) {
+                    results.push({
+                        title,
+                        link: link,
+                        snippet: snippet || title
+                    });
+                }
+            }
+        });
+        console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${results.length}`);
+        console.log("百度搜索结果: " + JSON.stringify(results));
+        return results;
+    } catch (baiduError) {
+        console.error('百度搜索失败:', baiduError && baiduError.message ? baiduError.message : baiduError);
+        return [];
+    }
+}
+
 async function searchNews(query) {
     try {
-        // 方法1: 使用Google Custom Search API（如果配置了）
-        // 从环境变量或config文件读取
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        
-        if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
-            try {
-                // 添加中文搜索参数，提高中文搜索结果质量
-                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
-                
-                // 获取当前部署的域名，用于设置Referer
-                const referer = process.env.VERCEL_URL 
-                    ? `https://${process.env.VERCEL_URL}` 
-                    : (process.env.SITE_URL || 'https://news.zxt.net.cn');
-                
-                console.log('使用Google Custom Search API搜索:', query);
-                const googleResponse = await axios.get(googleUrl, { 
-                    timeout: 15000,
-                    headers: {
-                        'Accept': 'application/json',
-                        'Referer': referer,
-                        'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
-                    }
-                });
-                
-                if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
-                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
-                    return googleResponse.data.items.map(item => ({
-                        title: item.title,
-                        link: item.link,
-                        snippet: item.snippet || item.htmlSnippet || ''
-                    }));
-                } else {
-                    console.log('Google搜索返回空结果');
-                }
-            } catch (googleError) {
-                // 详细记录错误信息，便于调试
-                if (googleError.response) {
-                    console.error('Google搜索API错误:', {
-                        status: googleError.response.status,
-                        statusText: googleError.response.statusText,
-                        data: googleError.response.data
-                    });
-                } else {
-                    console.error('Google搜索失败，尝试备用方法:', googleError.message);
-                }
-            }
-        } else {
+
+        const baiduAbort = new AbortController();
+        const baiduPromise = searchBaidu(query, baiduAbort.signal);
+        if (!(GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID)) {
             console.log('Google Custom Search API未配置，使用备用搜索方法');
+            return await baiduPromise;
         }
-        
-        // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
-        // Google 密钥过期时会立刻 400，这里是预览实际拿到结果的路径。
-        // Node 26 上这条连接会 socket hang up；对连接重置重试一次，并强制 IPv4。
-        try {
-            const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-            const baiduHeaders = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Referer': 'https://www.baidu.com/'
-            };
-            let response;
-            let baiduError;
-            for (let attempt = 0; attempt < 2; attempt++) {
-                try {
-                    response = await axios.get(searchUrl, withIpv4({
-                        headers: baiduHeaders,
-                        timeout: 10000,
-                        maxRedirects: 5
-                    }));
-                    baiduError = null;
-                    break;
-                } catch (error) {
-                    baiduError = error;
-                    const reset = error.code === 'ECONNRESET' || /socket hang up/i.test(error.message || '');
-                    console.error('百度搜索失败:', error.message);
-                    if (!reset || attempt === 1) {
-                        break;
-                    }
-                }
-            }
-            if (baiduError || !response) {
-                throw baiduError || new Error('百度搜索无响应');
-            }
-            
-            const $ = cheerio.load(response.data);
-            const results = [];
-            
-            // 解析百度搜索结果 - 尝试多种选择器
-            $('.result, .c-result, .result-op').each((index, element) => {
-                if (results.length >= 5) return false; // 最多取5个结果
-                
-                const $el = $(element);
-                const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
-                let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
-                const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
-                
-                if (title && link) {
-                    // 处理百度跳转链接
-                    if (link.startsWith('/link?url=')) {
-                        // 尝试提取真实URL
-                        try {
-                            const urlMatch = link.match(/url=([^&]+)/);
-                            if (urlMatch) {
-                                link = decodeURIComponent(urlMatch[1]);
-                            }
-                        } catch (e) {
-                            // 如果解析失败，跳过这个结果
-                            return;
-                        }
-                    }
-                    
-                    if (link && link.startsWith('http')) {
-                        results.push({
-                            title,
-                            link: link,
-                            snippet: snippet || title
-                        });
-                    }
-                }
-            });
-            console.log("百度搜索结果: " + JSON.stringify(results));
-            if (results.length > 0) {
-                return results;
-            }
-        } catch (baiduError) {
-            if (baiduError && baiduError.message === '百度搜索无响应') {
-                console.error('百度搜索失败:', baiduError.message);
-            }
+
+        const googleResults = await searchGoogle(query, GOOGLE_API_KEY, GOOGLE_SEARCH_ENGINE_ID);
+        if (googleResults.length > 0) {
+            baiduAbort.abort();
+            baiduPromise.catch(() => {});
+            return googleResults;
         }
-        
-        // 如果都失败了，返回空数组
-        return [];
+        return await baiduPromise;
     } catch (error) {
         console.error('搜索新闻失败:', error);
         return [];
@@ -900,7 +915,7 @@ async function fetchArticleContent(url) {
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'Referer': 'https://www.baidu.com/'
             },
-            timeout: 10000,
+            timeout: ARTICLE_FETCH_TIMEOUT_MS,
             maxRedirects: 5
         }));
         
@@ -971,36 +986,29 @@ async function fetchArticleContent(url) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticles(query) {
+async function fetchMultipleArticles(query, presetResults) {
     try {
-        // 搜索相关新闻
-        const searchResults = await searchNews(query);
+        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query);
         
         if (searchResults.length === 0) {
             return { content: null, articles: [] };
     }
         
-        // 抓取前3个搜索结果的内容
-        const articles = [];
-        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
-            const result = searchResults[i];
-            // console.log(`正在抓取: ${result.title} - ${result.link}`);
-            
+        // 前 3 条并行抓取。串行再加 1 秒间隔会把 sources 事件拖到正文全部结束。
+        const picked = searchResults.slice(0, 3);
+        const fetched = await Promise.all(picked.map(async (result) => {
             const content = await fetchArticleContent(result.link);
             console.log("网页抓取文章内容: " + content);
             if (content && content.length > 200) {
-                articles.push({
+                return {
                     title: result.title,
                     content: content,
                     source: result.link
-                });
+                };
             }
-            
-            // 避免请求过快
-            if (i < Math.min(3, searchResults.length) - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
+            return null;
+        }));
+        const articles = fetched.filter(Boolean);
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1037,7 +1045,7 @@ async function fetchMultipleArticles(query) {
  * @param {number} retries - 重试次数，默认2次
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContentWithRetry(url, retries = 2) {
+async function fetchArticleContentWithRetry(url, retries = 1) {
     // 验证和清理URL
     if (!url || !url.startsWith('http')) {
         console.error(`无效的URL: ${url}`);
@@ -1076,7 +1084,7 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
             
             const response = await axios.get(url, withIpv4({
                 headers: headers,
-                timeout: 15000, // 增加到15秒超时
+                timeout: ARTICLE_FETCH_TIMEOUT_MS,
                 maxRedirects: 5,
                 validateStatus: function (status) {
                     // 接受2xx和3xx状态码
@@ -1177,39 +1185,23 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 .replace(/[\r\n]+/g, '\n') // 统一换行符
                 .trim();
             
-            // 如果成功获取到内容，返回
-            if (content.length > 200) {
-                // 限制内容长度（避免token过多）
-                if (content.length > 5000) {
-                    content = content.substring(0, 5000) + '...';
-                }
-                return content;
+            if (content.length > 5000) {
+                content = content.substring(0, 5000) + '...';
             }
-            
-            // 如果内容太短，可能是提取失败，继续重试
-            if (attempt < retries) {
-                console.log(`内容提取不足 (${url})，尝试重试 ${attempt + 1}/${retries}`);
-                await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // 递增延迟
-                continue;
-            }
-            
-            return content; // 即使内容短也返回
+            // 页面能打开但正文太短时，再请求同一 URL 不会变长，直接返回。
+            return content;
             
         } catch (error) {
-            const isLastAttempt = attempt === retries;
+            const isLastAttempt = attempt === retries || !isConnectionReset(error);
             const errorMsg = error.response 
                 ? `HTTP ${error.response.status}: ${error.response.statusText}`
                 : error.message;
             
             console.error(`抓取网页内容失败 (${url}) [尝试 ${attempt + 1}/${retries + 1}]:`, errorMsg);
             
-            // 如果是最后一次尝试，返回空
             if (isLastAttempt) {
                 return '';
             }
-            
-            // 等待后重试（递增延迟：1s, 2s, 3s...）
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
         }
     }
     
@@ -1221,56 +1213,30 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticlesWithRetry(query) {
+async function fetchMultipleArticlesWithRetry(query, presetResults) {
     try {
-        // 搜索相关新闻
-        const searchResults = await searchNews(query);
+        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query);
         
         if (searchResults.length === 0) {
             return { content: null, articles: [] };
         }
         
-        // 抓取前3个搜索结果的内容（并发控制，但限制并发数）
-        const articles = [];
-        const maxConcurrent = 2; // 最多同时抓取2个
-        const articlesToFetch = Math.min(3, searchResults.length);
-        
-        // 分批处理，避免同时请求太多
-        for (let i = 0; i < articlesToFetch; i += maxConcurrent) {
-            const batch = searchResults.slice(i, i + maxConcurrent);
+        const picked = searchResults.slice(0, 3);
+        const fetched = await Promise.all(picked.map(async (result, index) => {
+            console.log(`正在抓取 [${index + 1}/${picked.length}]: ${result.title}`);
+            const content = await fetchArticleContentWithRetry(result.link, 1);
             
-            // 并发抓取当前批次
-            const batchPromises = batch.map(async (result, index) => {
-                console.log(`正在抓取 [${i + index + 1}/${articlesToFetch}]: ${result.title}`);
-                const content = await fetchArticleContentWithRetry(result.link, 2); // 最多重试2次
-                
-                if (content && content.length > 200) {
-                    return {
-                        title: result.title,
-                        content: content,
-                        source: result.link
-                    };
-                } else {
-                    console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
-                    return null;
-                }
-            });
-            
-            // 等待当前批次完成
-            const batchResults = await Promise.all(batchPromises);
-            
-            // 过滤掉失败的结果
-            batchResults.forEach(article => {
-                if (article) {
-                    articles.push(article);
-                }
-            });
-            
-            // 批次之间添加延迟，避免请求过快
-            if (i + maxConcurrent < articlesToFetch) {
-                await new Promise(resolve => setTimeout(resolve, 1500));
+            if (content && content.length > 200) {
+                return {
+                    title: result.title,
+                    content: content,
+                    source: result.link
+                };
             }
-        }
+            console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
+            return null;
+        }));
+        const articles = fetched.filter(Boolean);
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1318,6 +1284,12 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Transfer-Encoding', 'chunked');
     res.setHeader('X-Vercel-Cache-Control', 'no-cache');
+    if (res.socket && typeof res.socket.setNoDelay === 'function') {
+        res.socket.setNoDelay(true);
+    }
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
     
     // 定义响应状态和工具函数
     let isResponseEnded = false;
@@ -1405,15 +1377,29 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        // 步骤2: 搜索并抓取文章内容
-        articlesData = GOOGLE_SEARCH_SWITCH ? await fetchMultipleArticlesWithRetry(title) : await fetchMultipleArticles(title);
+        // 步骤2: 先出搜索命中，再并行抓正文。sources 不再等全部正文下载完。
+        const searchStarted = Date.now();
+        const searchResults = await searchNews(title);
+        console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length}`);
+        const earlySources = toSourceList(searchResults);
+        if (earlySources.length > 0) {
+            safeWrite(`data: ${JSON.stringify({
+                type: 'sources',
+                articles: earlySources
+            })}\n\n`);
+            safeWrite(`: flush${' '.repeat(4096)}\n\n`);
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        articlesData = GOOGLE_SEARCH_SWITCH
+            ? await fetchMultipleArticlesWithRetry(title, earlySources)
+            : await fetchMultipleArticles(title, earlySources);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
-        // 发送文章链接信息（如果有）
-        if (articlesData.articles && articlesData.articles.length > 0) {
+        const finalSources = articlesData.articles || [];
+        if (finalSources.length > 0 && !sameSources(earlySources, finalSources)) {
             safeWrite(`data: ${JSON.stringify({ 
                 type: 'sources',
-                articles: articlesData.articles 
+                articles: finalSources 
             })}\n\n`);
         }
         
