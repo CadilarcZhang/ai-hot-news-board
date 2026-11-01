@@ -1,15 +1,20 @@
 // 加载环境变量（必须在其他模块之前）
 require('dotenv').config();
 // 出站 DNS：必须在任何 axios 请求之前固定为 IPv4。
-const { withIpv4 } = require('./lib/outboundNetwork');
+const { withIpv4, primeIpv4, warmHttpsOrigin } = require('./lib/outboundNetwork');
 const {
     toSourceList,
     sameSources,
     isConnectionReset,
     isAbortError,
     collectSettled,
+    chooseSearchWinner,
     FETCH_CANDIDATE_LIMIT
 } = require('./lib/searchSources');
+const { extractBaiduNewsResults, collectHtmlUntilResults } = require('./lib/baiduSerp');
+// 冷启动时先解析并握手 www.baidu.com，第一次搜索复用这条连接。
+primeIpv4('www.baidu.com');
+warmHttpsOrigin('www.baidu.com');
 
 const express = require('express');
 const cors = require('cors');
@@ -761,14 +766,16 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
 const BAIDU_SEARCH_TIMEOUT_MS = 7000;
+// 首包超过这个时间才再发一条相同检索，避免每次搜索都打两次百度。
+const BAIDU_HEDGE_AFTER_MS = 1000;
 const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
 
 /**
- * Google 优先。密钥过期时不等它结束再连百度：两条请求同时发出，
- * Google 有结果就用 Google，否则用已经在飞的百度结果。
+ * Google 先返回非空结果就用 Google。
+ * 百度先拿到命中就立刻返回，不再空等 Google 超时。
  */
-async function searchGoogle(query, apiKey, engineId) {
+async function searchGoogle(query, apiKey, engineId, signal) {
     try {
         const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
         const referer = process.env.VERCEL_URL
@@ -778,6 +785,7 @@ async function searchGoogle(query, apiKey, engineId) {
         console.log('使用Google Custom Search API搜索:', query);
         const googleResponse = await axios.get(googleUrl, withIpv4({
             timeout: GOOGLE_SEARCH_TIMEOUT_MS,
+            signal,
             headers: {
                 'Accept': 'application/json',
                 'Referer': referer,
@@ -796,6 +804,9 @@ async function searchGoogle(query, apiKey, engineId) {
         console.log('Google搜索返回空结果');
         return [];
     } catch (googleError) {
+        if (isAbortError(googleError, signal)) {
+            return [];
+        }
         if (googleError.response) {
             console.error('Google搜索API错误:', {
                 status: googleError.response.status,
@@ -809,86 +820,124 @@ async function searchGoogle(query, apiKey, engineId) {
     }
 }
 
-async function searchBaidu(query, signal) {
+async function fetchBaiduOnce(query, signal) {
     const started = Date.now();
+    const empty = { results: [], error: null, headersMs: 0, totalMs: 0, bytes: 0, early: false };
     try {
         const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-        const baiduHeaders = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Referer': 'https://www.baidu.com/'
+        const response = await axios.get(searchUrl, withIpv4({
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.baidu.com/'
+            },
+            timeout: BAIDU_SEARCH_TIMEOUT_MS,
+            maxRedirects: 5,
+            responseType: 'stream',
+            signal
+        }));
+        const headersMs = Date.now() - started;
+        const collected = await collectHtmlUntilResults(response.data, extractBaiduNewsResults);
+        return {
+            results: collected.results,
+            error: null,
+            headersMs,
+            totalMs: Date.now() - started,
+            bytes: collected.bytes,
+            early: collected.early
         };
-        let response;
-        let baiduError;
-        for (let attempt = 0; attempt < 2; attempt++) {
-            try {
-                response = await axios.get(searchUrl, withIpv4({
-                    headers: baiduHeaders,
-                    timeout: BAIDU_SEARCH_TIMEOUT_MS,
-                    maxRedirects: 5,
-                    signal
-                }));
-                baiduError = null;
-                break;
-            } catch (error) {
-                baiduError = error;
-                if (signal && signal.aborted) {
-                    break;
-                }
-                console.error('百度搜索失败:', error.message);
-                // 只对连接重置立刻重试。读超时再试一次会把第一次搜索拉长一倍。
-                if (!isConnectionReset(error) || attempt === 1) {
-                    break;
-                }
-            }
+    } catch (error) {
+        if (!isAbortError(error, signal)) {
+            console.error('百度搜索失败:', error.message);
         }
-        if (signal && signal.aborted) {
-            return [];
-        }
-        if (baiduError || !response) {
-            throw baiduError || new Error('百度搜索无响应');
-        }
-
-        const $ = cheerio.load(response.data);
-        const results = [];
-
-        $('.result, .c-result, .result-op').each((index, element) => {
-            if (results.length >= 5) return false;
-
-            const $el = $(element);
-            const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
-            let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
-            const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
-
-            if (title && link) {
-                if (link.startsWith('/link?url=')) {
-                    try {
-                        const urlMatch = link.match(/url=([^&]+)/);
-                        if (urlMatch) {
-                            link = decodeURIComponent(urlMatch[1]);
-                        }
-                    } catch (e) {
-                        return;
-                    }
-                }
-
-                if (link && link.startsWith('http')) {
-                    results.push({
-                        title,
-                        link: link,
-                        snippet: snippet || title
-                    });
-                }
-            }
+        return Object.assign({}, empty, {
+            error,
+            totalMs: Date.now() - started
         });
-        console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${results.length}`);
-        console.log("百度搜索结果: " + JSON.stringify(results));
-        return results;
-    } catch (baiduError) {
-        console.error('百度搜索失败:', baiduError && baiduError.message ? baiduError.message : baiduError);
+    }
+}
+
+async function searchBaidu(query, signal) {
+    const started = Date.now();
+    if (signal && signal.aborted) {
         return [];
     }
+
+    const primaryController = new AbortController();
+    let hedgeController = null;
+    const abortInFlight = () => {
+        primaryController.abort();
+        if (hedgeController) hedgeController.abort();
+    };
+    if (signal) {
+        signal.addEventListener('abort', abortInFlight, { once: true });
+    }
+
+    let resolveHedge;
+    const hedgePromise = new Promise((resolve) => {
+        resolveHedge = resolve;
+    });
+    const startHedge = () => {
+        if (hedgeController || (signal && signal.aborted)) {
+            return;
+        }
+        hedgeController = new AbortController();
+        fetchBaiduOnce(query, hedgeController.signal).then(resolveHedge);
+    };
+    const hedgeTimer = setTimeout(startHedge, BAIDU_HEDGE_AFTER_MS);
+    if (typeof hedgeTimer.unref === 'function') {
+        hedgeTimer.unref();
+    }
+
+    const primaryPromise = fetchBaiduOnce(query, primaryController.signal);
+    const winner = await new Promise((resolve) => {
+        let settled = false;
+        const finish = (pack, hedged) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(hedgeTimer);
+            abortInFlight();
+            resolveHedge(null);
+            resolve({ pack, hedged });
+        };
+
+        primaryPromise.then((pack) => {
+            if (settled) return;
+            if (pack.results.length > 0) {
+                finish(pack, false);
+                return;
+            }
+            if (hedgeController || isConnectionReset(pack.error)) {
+                if (isConnectionReset(pack.error)) {
+                    clearTimeout(hedgeTimer);
+                    startHedge();
+                }
+                hedgePromise.then((hedgePack) => {
+                    if (!hedgePack || hedgePack.results.length === 0) {
+                        finish(pack, false);
+                        return;
+                    }
+                    finish(hedgePack, true);
+                });
+                return;
+            }
+            clearTimeout(hedgeTimer);
+            finish(pack, false);
+        });
+
+        hedgePromise.then((pack) => {
+            if (settled || !pack || pack.results.length === 0) return;
+            finish(pack, true);
+        });
+    });
+
+    const pack = winner.pack || { results: [], headersMs: 0, bytes: 0, early: false };
+    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${pack.results.length} headers ${pack.headersMs || 0}ms bytes ${pack.bytes || 0} early ${pack.early ? 1 : 0} hedge ${winner.hedged ? 1 : 0}`);
+    if (pack.results.length > 0) {
+        console.log('百度搜索结果: ' + JSON.stringify(pack.results));
+    }
+    return pack.results;
 }
 
 async function searchNews(query) {
@@ -897,21 +946,61 @@ async function searchNews(query) {
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
+        const region = process.env.VERCEL_REGION || 'local';
 
         const baiduAbort = new AbortController();
-        const baiduPromise = searchBaidu(query, baiduAbort.signal);
+        let baiduDone = false;
+        let baiduResults = [];
+        const baiduTask = searchBaidu(query, baiduAbort.signal).then((results) => {
+            baiduDone = true;
+            baiduResults = results || [];
+            return baiduResults;
+        });
+
         if (!(GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID)) {
             console.log('Google Custom Search API未配置，使用备用搜索方法');
-            return await baiduPromise;
+            const results = await baiduTask;
+            console.log(`搜索来源 baidu 条数 ${results.length} region=${region}`);
+            return results;
         }
 
-        const googleResults = await searchGoogle(query, GOOGLE_API_KEY, GOOGLE_SEARCH_ENGINE_ID);
-        if (googleResults.length > 0) {
-            baiduAbort.abort();
-            baiduPromise.catch(() => {});
+        const googleAbort = new AbortController();
+        let googleDone = false;
+        let googleResults = [];
+        const googleTask = searchGoogle(query, GOOGLE_API_KEY, GOOGLE_SEARCH_ENGINE_ID, googleAbort.signal).then((results) => {
+            googleDone = true;
+            googleResults = results || [];
             return googleResults;
-        }
-        return await baiduPromise;
+        });
+
+        return await new Promise((resolve) => {
+            let settled = false;
+            const pump = () => {
+                if (settled) return;
+                const decision = chooseSearchWinner({
+                    googleDone,
+                    googleResults,
+                    baiduDone,
+                    baiduResults
+                });
+                if (!decision.decided) return;
+                settled = true;
+                if (decision.abort === 'baidu') baiduAbort.abort();
+                if (decision.abort === 'google') googleAbort.abort();
+                console.log(`搜索来源 ${decision.via} 条数 ${decision.results.length} region=${region}`);
+                resolve(decision.results);
+            };
+            googleTask.then(pump, () => {
+                googleDone = true;
+                googleResults = [];
+                pump();
+            });
+            baiduTask.then(pump, () => {
+                baiduDone = true;
+                baiduResults = [];
+                pump();
+            });
+        });
     } catch (error) {
         console.error('搜索新闻失败:', error);
         return [];

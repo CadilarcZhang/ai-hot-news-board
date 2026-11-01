@@ -6,6 +6,7 @@ const {
     sameSources,
     isConnectionReset,
     createFetchBudget,
+    chooseSearchWinner,
     SEARCH_SOURCE_LIMIT,
     FETCH_CANDIDATE_LIMIT,
     MAX_ARTICLES
@@ -55,12 +56,64 @@ function testConnectionReset() {
     assert.strictEqual(isConnectionReset(null), false);
 }
 
+function testChooseSearchWinner() {
+    const baiduHits = [{ title: 'b', link: 'https://example.com/b' }];
+    const googleHits = [{ title: 'g', link: 'https://example.com/g' }];
+
+    const googleFirst = chooseSearchWinner({
+        googleDone: true,
+        googleResults: googleHits,
+        baiduDone: false,
+        baiduResults: []
+    });
+    assert.strictEqual(googleFirst.decided, true);
+    assert.strictEqual(googleFirst.via, 'google');
+    assert.strictEqual(googleFirst.abort, 'baidu');
+
+    const baiduFirst = chooseSearchWinner({
+        googleDone: false,
+        googleResults: [],
+        baiduDone: true,
+        baiduResults: baiduHits
+    });
+    assert.strictEqual(baiduFirst.via, 'baidu');
+    assert.strictEqual(baiduFirst.abort, 'google');
+    assert.strictEqual(baiduFirst.results.length, 1);
+
+    const waitForBaidu = chooseSearchWinner({
+        googleDone: true,
+        googleResults: [],
+        baiduDone: false,
+        baiduResults: []
+    });
+    assert.strictEqual(waitForBaidu.decided, false);
+
+    const googleEmpty = chooseSearchWinner({
+        googleDone: true,
+        googleResults: [],
+        baiduDone: true,
+        baiduResults: baiduHits
+    });
+    assert.strictEqual(googleEmpty.via, 'baidu');
+    assert.strictEqual(googleEmpty.abort, null);
+
+    const bothEmpty = chooseSearchWinner({
+        googleDone: true,
+        googleResults: [],
+        baiduDone: true,
+        baiduResults: []
+    });
+    assert.strictEqual(bothEmpty.decided, true);
+    assert.deepStrictEqual(bothEmpty.results, []);
+}
+
 function run() {
     testToSourceListCapsAndSkipsBadLinks();
     testSameSources();
     testCandidateLimitCoversFourthHit();
     testBudgetAbortsWhenFull();
     testConnectionReset();
+    testChooseSearchWinner();
     console.log('searchSources tests ok');
 }
 

@@ -102,7 +102,8 @@ function testOutboundPrefersIpv4() {
 
 function testVercelKeepsDefaultIad1() {
     const vercel = require('../vercel.json');
-    assert.strictEqual(vercel.regions, undefined);
+    // Fluid 会把未固定的函数调度到 sin1/hkg1/hnd1。只允许 iad1，避免把区域改到亚洲。
+    assert.deepStrictEqual(vercel.regions, ['iad1']);
     assert.ok(vercel.routes.some((route) => route.src === '/api/(.*)' && route.dest === '/server.js'));
     const hashed = vercel.routes.find((route) => route.headers && /immutable/.test(route.headers['Cache-Control']));
     assert.ok(hashed && /\[a-fA-F0-9\]\{8,\}/.test(hashed.src));
