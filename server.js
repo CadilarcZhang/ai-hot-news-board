@@ -17,7 +17,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
-const { hotNewsCache } = require('./lib/hotNewsCache');
+const { hotNewsCache, isUsableHotNewsPayload } = require('./lib/hotNewsCache');
 const { setStaticAssetHeaders } = require('./lib/staticCacheHeaders');
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -443,6 +443,16 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
         // family 4: TianAPI from the Node 26 preview runtime exceeded this budget
         // while racing IPv6. Production Node 24 completes on IPv4 in about 2s.
         const response = await axios.get(apiUrl, withIpv4({ timeout: 5000 }));
+        // 空列表不要写进 3 分钟缓存，否则一次上游空响应会让该平台一直空白。
+        if (!isUsableHotNewsPayload(response.data)) {
+            const stale = hotNewsCache.getStale(platform);
+            if (stale) {
+                res.setHeader('X-Hot-News-Cache', 'STALE');
+                return res.json(stale);
+            }
+            res.setHeader('X-Hot-News-Cache', 'EMPTY');
+            return res.json(response.data);
+        }
         hotNewsCache.set(platform, response.data);
         res.setHeader('X-Hot-News-Cache', refresh ? 'REFRESH' : 'MISS');
         res.json(response.data);

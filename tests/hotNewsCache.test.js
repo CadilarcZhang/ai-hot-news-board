@@ -4,7 +4,8 @@ const assert = require('assert');
 const {
     HotNewsMemoryCache,
     HOT_NEWS_TTL_SECONDS,
-    HOT_NEWS_STALE_TTL_SECONDS
+    HOT_NEWS_STALE_TTL_SECONDS,
+    isUsableHotNewsPayload
 } = require('../lib/hotNewsCache');
 const {
     getStaticCacheControl,
@@ -48,6 +49,13 @@ function testStaleExpires() {
     clock.advance(11);
     assert.strictEqual(cache.get('toutiao'), null);
     assert.strictEqual(cache.getStale('toutiao'), null);
+}
+
+function testEmptyListIsNotUsable() {
+    assert.strictEqual(isUsableHotNewsPayload({ code: 200, result: { list: [] } }), false);
+    assert.strictEqual(isUsableHotNewsPayload({ code: 200, result: {} }), false);
+    assert.strictEqual(isUsableHotNewsPayload(null), false);
+    assert.strictEqual(isUsableHotNewsPayload({ result: { list: [{ word: 'ok' }] } }), true);
 }
 
 function testPlatformIsolation() {
@@ -106,6 +114,7 @@ function testVercelKeepsDefaultIad1() {
 function run() {
     testFreshHitAndMiss();
     testStaleExpires();
+    testEmptyListIsNotUsable();
     testPlatformIsolation();
     testTtlConstants();
     testStaticCachePolicy();
