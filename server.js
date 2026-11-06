@@ -1,5 +1,20 @@
 // 加载环境变量（必须在其他模块之前）
 require('dotenv').config();
+// 出站 DNS：必须在任何 axios 请求之前固定为 IPv4。
+const { withIpv4, primeIpv4, warmHttpsOrigin } = require('./lib/outboundNetwork');
+const {
+    toSourceList,
+    sameSources,
+    isConnectionReset,
+    isAbortError,
+    collectSettled,
+    chooseSearchWinner,
+    FETCH_CANDIDATE_LIMIT
+} = require('./lib/searchSources');
+const { extractBaiduNewsResults, collectHtmlUntilResults } = require('./lib/baiduSerp');
+// 冷启动时先解析并握手 www.baidu.com，第一次搜索复用这条连接。
+primeIpv4('www.baidu.com');
+warmHttpsOrigin('www.baidu.com');
 
 const express = require('express');
 const cors = require('cors');
@@ -7,6 +22,8 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
+const { hotNewsCache, isUsableHotNewsPayload } = require('./lib/hotNewsCache');
+const { setStaticAssetHeaders } = require('./lib/staticCacheHeaders');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -167,7 +184,8 @@ console.log('基础路径:', BASE_PATH);
 app.use(STATIC_PATH, express.static(path.join(__dirname, 'public'), {
     index: 'index.html',
     extensions: ['html'],
-    maxAge: '1d'
+    maxAge: 0,
+    setHeaders: setStaticAssetHeaders
 }));
 
 // 如果 BASE_PATH 不为空，同时提供根路径的静态文件服务（用于本地开发）
@@ -177,7 +195,8 @@ if (BASE_PATH && BASE_PATH !== '/') {
     // 创建一个静态文件中间件，只处理静态资源
     const staticMiddleware = express.static(path.join(__dirname, 'public'), {
         index: false, // 不提供 index.html
-        maxAge: '1d'
+        maxAge: 0,
+        setHeaders: setStaticAssetHeaders
     });
     
     app.use('/', (req, res, next) => {
@@ -392,20 +411,22 @@ app.get(`${BASE_PATH}/api/server-location`, async (req, res) => {
 
 // 获取热搜数据的接口
 app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
+    const platform = req.query.platform || 'networkhot';
+    const refresh = req.query.refresh === 'true';
+    // API 本身不走 CDN/浏览器长缓存；新鲜度由进程内 3 分钟 TTL 控制。
+    res.setHeader('Cache-Control', 'private, no-store');
+
     try {
-        const platform = req.query.platform || 'networkhot';
-        const refresh = req.query.refresh === 'true';
-        if (refresh) {
+        if (!refresh) {
+            const cachedData = hotNewsCache.get(platform);
+            if (cachedData) {
+                res.setHeader('X-Hot-News-Cache', 'HIT');
+                return res.json(cachedData);
+            }
+        } else {
             console.log(`强制刷新热搜数据，平台: ${platform}`);
         }
-        // 尝试从缓存获取热搜数据
-        const cacheKey = `hot-news-${platform}`;
-        const cachedData = simpleCache.get(cacheKey);
-        
-        if (cachedData && !refresh) {
-            return res.json(cachedData);
-        }
-        
+
         // 根据平台选择不同的API接口
         let endpoint = '';
         switch(platform) {
@@ -421,16 +442,36 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
             default:
                 endpoint = 'networkhot';
         }
-        
+
         const apiUrl = `https://apis.tianapi.com/${endpoint}/index?key=${TIANAPI_KEY}`;
-        
-        const response = await axios.get(apiUrl);
-        // console.log(JSON.stringify(response.data));
-        // 缓存结果，设置15分钟过期（增加缓存时间）
-        simpleCache.set(cacheKey, response.data, 1800);
-        
+        // 5s timeout: fail fast to stale in-process copy instead of hanging the function.
+        // family 4: TianAPI from the Node 26 preview runtime exceeded this budget
+        // while racing IPv6. Production Node 24 completes on IPv4 in about 2s.
+        const response = await axios.get(apiUrl, withIpv4({ timeout: 5000 }));
+        // 空列表不要写进 3 分钟缓存，否则一次上游空响应会让该平台一直空白。
+        if (!isUsableHotNewsPayload(response.data)) {
+            const stale = hotNewsCache.getStale(platform);
+            if (stale) {
+                res.setHeader('X-Hot-News-Cache', 'STALE');
+                return res.json(stale);
+            }
+            res.setHeader('X-Hot-News-Cache', 'EMPTY');
+            return res.json(response.data);
+        }
+        hotNewsCache.set(platform, response.data);
+        res.setHeader('X-Hot-News-Cache', refresh ? 'REFRESH' : 'MISS');
         res.json(response.data);
     } catch (error) {
+        const stale = hotNewsCache.getStale(platform);
+        if (stale) {
+            console.error('获取热搜数据失败，返回过期缓存', {
+                platform,
+                code: error.code || null,
+                status: error.response ? error.response.status : null
+            });
+            res.setHeader('X-Hot-News-Cache', 'STALE');
+            return res.json(stale);
+        }
         console.error('获取热搜数据失败:', error);
         res.status(500).json({ error: '获取热搜数据失败', message: error.message });
     }
@@ -724,122 +765,250 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Array>} 返回搜索结果数组，包含标题、链接、摘要
  */
-async function searchNews(query) {
+const BAIDU_SEARCH_TIMEOUT_MS = 7000;
+const GOOGLE_SEARCH_TIMEOUT_MS = 5000;
+const ARTICLE_FETCH_TIMEOUT_MS = 8000;
+
+/**
+ * Google 先返回非空结果就用 Google。
+ * 百度先拿到命中就立刻返回，不再空等 Google 超时。
+ */
+async function searchGoogle(query, apiKey, engineId, signal) {
     try {
-        // 方法1: 使用Google Custom Search API（如果配置了）
-        // 从环境变量或config文件读取
+        const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
+        const referer = process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : (process.env.SITE_URL || 'https://news.zxt.net.cn');
+
+        console.log('使用Google Custom Search API搜索:', query);
+        const googleResponse = await axios.get(googleUrl, withIpv4({
+            timeout: GOOGLE_SEARCH_TIMEOUT_MS,
+            signal,
+            headers: {
+                'Accept': 'application/json',
+                'Referer': referer,
+                'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
+            }
+        }));
+
+        if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
+            console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
+            return googleResponse.data.items.map(item => ({
+                title: item.title,
+                link: item.link,
+                snippet: item.snippet || item.htmlSnippet || ''
+            }));
+        }
+        console.log('Google搜索返回空结果');
+        return [];
+    } catch (googleError) {
+        if (isAbortError(googleError, signal)) {
+            return [];
+        }
+        if (googleError.response) {
+            console.error('Google搜索API错误:', {
+                status: googleError.response.status,
+                statusText: googleError.response.statusText,
+                data: googleError.response.data
+            });
+        } else {
+            console.error('Google搜索失败，尝试备用方法:', googleError.message);
+        }
+        return [];
+    }
+}
+
+async function fetchBaiduOnce(query, signal, hooks) {
+    const started = Date.now();
+    const empty = {
+        results: [],
+        error: null,
+        headersMs: 0,
+        totalMs: 0,
+        bytes: 0,
+        early: false,
+        firstHitBytes: 0
+    };
+    const onHeaders = hooks && hooks.onHeaders;
+    const onResults = hooks && hooks.onResults;
+    const dropBody = (response) => {
+        if (!response || !response.data) return;
+        response.data.on('error', () => {});
+        try {
+            response.data.destroy();
+        } catch (error) {
+            // 连接已经结束。
+        }
+    };
+    try {
+        const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
+        const response = await axios.get(searchUrl, withIpv4({
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': 'https://www.baidu.com/'
+            },
+            timeout: BAIDU_SEARCH_TIMEOUT_MS,
+            maxRedirects: 5,
+            responseType: 'stream',
+            signal
+        }));
+        if (signal && signal.aborted) {
+            dropBody(response);
+            return Object.assign({}, empty, { totalMs: Date.now() - started });
+        }
+        const headersMs = Date.now() - started;
+        if (onHeaders) onHeaders();
+        if (signal && signal.aborted) {
+            dropBody(response);
+            return Object.assign({}, empty, { headersMs, totalMs: Date.now() - started });
+        }
+        const collected = await collectHtmlUntilResults(response.data, extractBaiduNewsResults, {
+            onResults
+        });
+        return {
+            results: collected.results,
+            error: null,
+            headersMs,
+            totalMs: Date.now() - started,
+            bytes: collected.bytes,
+            early: collected.early,
+            firstHitBytes: collected.firstHitBytes || 0
+        };
+    } catch (error) {
+        if (!isAbortError(error, signal)) {
+            console.error('百度搜索失败:', error.message);
+        }
+        return Object.assign({}, empty, {
+            error,
+            totalMs: Date.now() - started
+        });
+    }
+}
+
+async function searchBaidu(query, signal, onHits) {
+    const started = Date.now();
+    if (signal && signal.aborted) {
+        return [];
+    }
+
+    // 两条连接只抢首包。先拿到响应头的那条继续读正文，另一条立刻取消，
+    // 避免两份 384KB 页面抢带宽。
+    const controllers = [new AbortController(), new AbortController()];
+    let leader = -1;
+    const claim = (index) => {
+        if (leader !== -1) return;
+        leader = index;
+        controllers.forEach((controller, i) => {
+            if (i !== index) controller.abort();
+        });
+    };
+    const abortBoth = () => controllers.forEach((controller) => controller.abort());
+    if (signal) {
+        signal.addEventListener('abort', abortBoth, { once: true });
+    }
+
+    let emitted = false;
+    const forwardHits = (results) => {
+        if (emitted || !results || results.length === 0 || typeof onHits !== 'function') return;
+        emitted = true;
+        console.log(`百度首条可用来源 ${Date.now() - started}ms 条数 ${results.length}`);
+        try {
+            onHits(results);
+        } catch (error) {
+            // SSE 写入失败不打断检索。
+        }
+    };
+
+    const packs = await Promise.all(controllers.map((controller, index) => {
+        return fetchBaiduOnce(query, controller.signal, {
+            onHeaders: () => claim(index),
+            onResults: forwardHits
+        });
+    }));
+
+    let pack = null;
+    if (leader >= 0 && packs[leader] && packs[leader].results.length > 0) {
+        pack = packs[leader];
+    } else {
+        pack = packs.find((item) => item && item.results.length > 0) || packs[Math.max(leader, 0)] || packs[0];
+    }
+
+    if ((!pack || pack.results.length === 0) && isConnectionReset(pack && pack.error) && !(signal && signal.aborted)) {
+        pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits });
+    }
+
+    const chosen = pack || { results: [], headersMs: 0, bytes: 0, early: false, firstHitBytes: 0 };
+    console.log(`百度搜索耗时 ${Date.now() - started}ms 条数 ${chosen.results.length} headers ${chosen.headersMs || 0}ms bytes ${chosen.bytes || 0} firstHit ${chosen.firstHitBytes || 0} early ${chosen.early ? 1 : 0} race ${leader >= 0 ? 1 : 0}`);
+    if (chosen.results.length > 0) {
+        console.log('百度搜索结果: ' + JSON.stringify(chosen.results));
+        if (!emitted) forwardHits(chosen.results);
+    }
+    return chosen.results;
+}
+
+async function searchNews(query, onHits) {
+    try {
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
         const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID || config.GOOGLE_SEARCH_ENGINE_ID;
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        
-        if (GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID) {
-            try {
-                // 添加中文搜索参数，提高中文搜索结果质量
-                const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_SEARCH_ENGINE_ID}&q=${encodeURIComponent(query)}&num=5&lr=lang_zh-CN&cr=countryCN`;
-                
-                // 获取当前部署的域名，用于设置Referer
-                const referer = process.env.VERCEL_URL 
-                    ? `https://${process.env.VERCEL_URL}` 
-                    : (process.env.SITE_URL || 'https://news.zxt.net.cn');
-                
-                console.log('使用Google Custom Search API搜索:', query);
-                const googleResponse = await axios.get(googleUrl, { 
-                    timeout: 15000,
-                    headers: {
-                        'Accept': 'application/json',
-                        'Referer': referer,
-                        'User-Agent': 'Mozilla/5.0 (compatible; HotNewsBot/1.0)'
-                    }
-                });
-                
-                if (googleResponse.data && googleResponse.data.items && googleResponse.data.items.length > 0) {
-                    console.log(`Google搜索成功，找到 ${googleResponse.data.items.length} 个结果: ${JSON.stringify(googleResponse.data.items)}`);
-                    return googleResponse.data.items.map(item => ({
-                        title: item.title,
-                        link: item.link,
-                        snippet: item.snippet || item.htmlSnippet || ''
-                    }));
-                } else {
-                    console.log('Google搜索返回空结果');
-                }
-            } catch (googleError) {
-                // 详细记录错误信息，便于调试
-                if (googleError.response) {
-                    console.error('Google搜索API错误:', {
-                        status: googleError.response.status,
-                        statusText: googleError.response.statusText,
-                        data: googleError.response.data
-                    });
-                } else {
-                    console.error('Google搜索失败，尝试备用方法:', googleError.message);
-                }
-            }
-        } else {
+        const region = process.env.VERCEL_REGION || 'local';
+
+        const baiduAbort = new AbortController();
+        let baiduDone = false;
+        let baiduResults = [];
+        const baiduTask = searchBaidu(query, baiduAbort.signal, onHits).then((results) => {
+            baiduDone = true;
+            baiduResults = results || [];
+            return baiduResults;
+        });
+
+        if (!(GOOGLE_SEARCH_SWITCH && GOOGLE_API_KEY && GOOGLE_SEARCH_ENGINE_ID)) {
             console.log('Google Custom Search API未配置，使用备用搜索方法');
+            const results = await baiduTask;
+            console.log(`搜索来源 baidu 条数 ${results.length} region=${region}`);
+            return results;
         }
-        
-        // 方法2: 使用百度搜索（备用方法，可能被反爬虫）
-        try {
-            const searchUrl = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&tn=news`;
-            
-            const response = await axios.get(searchUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Referer': 'https://www.baidu.com/'
-                },
-                timeout: 10000,
-                maxRedirects: 5
+
+        const googleAbort = new AbortController();
+        let googleDone = false;
+        let googleResults = [];
+        const googleTask = searchGoogle(query, GOOGLE_API_KEY, GOOGLE_SEARCH_ENGINE_ID, googleAbort.signal).then((results) => {
+            googleDone = true;
+            googleResults = results || [];
+            return googleResults;
+        });
+
+        return await new Promise((resolve) => {
+            let settled = false;
+            const pump = () => {
+                if (settled) return;
+                const decision = chooseSearchWinner({
+                    googleDone,
+                    googleResults,
+                    baiduDone,
+                    baiduResults
+                });
+                if (!decision.decided) return;
+                settled = true;
+                if (decision.abort === 'baidu') baiduAbort.abort();
+                if (decision.abort === 'google') googleAbort.abort();
+                console.log(`搜索来源 ${decision.via} 条数 ${decision.results.length} region=${region}`);
+                resolve(decision.results);
+            };
+            googleTask.then(pump, () => {
+                googleDone = true;
+                googleResults = [];
+                pump();
             });
-            
-            const $ = cheerio.load(response.data);
-            const results = [];
-            
-            // 解析百度搜索结果 - 尝试多种选择器
-            $('.result, .c-result, .result-op').each((index, element) => {
-                if (results.length >= 5) return false; // 最多取5个结果
-                
-                const $el = $(element);
-                const title = $el.find('h3 a, .t a, .c-title-text').text().trim();
-                let link = $el.find('h3 a, .t a').attr('href') || $el.find('a').first().attr('href');
-                const snippet = $el.find('.c-abstract, .c-span9, .c-abstract-text, .c-color-text').text().trim();
-                
-                if (title && link) {
-                    // 处理百度跳转链接
-                    if (link.startsWith('/link?url=')) {
-                        // 尝试提取真实URL
-                        try {
-                            const urlMatch = link.match(/url=([^&]+)/);
-                            if (urlMatch) {
-                                link = decodeURIComponent(urlMatch[1]);
-                            }
-                        } catch (e) {
-                            // 如果解析失败，跳过这个结果
-                            return;
-                        }
-                    }
-                    
-                    if (link && link.startsWith('http')) {
-                        results.push({
-                            title,
-                            link: link,
-                            snippet: snippet || title
-                        });
-                    }
-                }
+            baiduTask.then(pump, () => {
+                baiduDone = true;
+                baiduResults = [];
+                pump();
             });
-            console.log("百度搜索结果: " + JSON.stringify(results));
-            if (results.length > 0) {
-                return results;
-            }
-        } catch (baiduError) {
-            console.error('百度搜索失败:', baiduError.message);
-        }
-        
-        // 如果都失败了，返回空数组
-        return [];
+        });
     } catch (error) {
         console.error('搜索新闻失败:', error);
         return [];
@@ -851,18 +1020,19 @@ async function searchNews(query) {
  * @param {string} url - 网页URL
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContent(url) {
+async function fetchArticleContent(url, signal) {
     try {
-        const response = await axios.get(url, {
+        const response = await axios.get(url, withIpv4({
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'Referer': 'https://www.baidu.com/'
             },
-            timeout: 10000,
-            maxRedirects: 5
-        });
+            timeout: ARTICLE_FETCH_TIMEOUT_MS,
+            maxRedirects: 5,
+            signal
+        }));
         
         const $ = cheerio.load(response.data);
         
@@ -921,7 +1091,9 @@ async function fetchArticleContent(url) {
         
         return content;
     } catch (error) {
-        console.error(`抓取网页内容失败 (${url}):`, error.message);
+        if (!isAbortError(error, signal)) {
+            console.error(`抓取网页内容失败 (${url}):`, error.message);
+        }
         return '';
     }
 }
@@ -931,36 +1103,28 @@ async function fetchArticleContent(url) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticles(query) {
+async function fetchMultipleArticles(query, presetResults) {
     try {
-        // 搜索相关新闻
-        const searchResults = await searchNews(query);
+        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query);
         
         if (searchResults.length === 0) {
             return { content: null, articles: [] };
     }
         
-        // 抓取前3个搜索结果的内容
-        const articles = [];
-        for (let i = 0; i < Math.min(3, searchResults.length); i++) {
-            const result = searchResults[i];
-            // console.log(`正在抓取: ${result.title} - ${result.link}`);
-            
-            const content = await fetchArticleContent(result.link);
+        // 最多试 5 条，并行。凑够正文后不再等最慢的失败请求。
+        const picked = searchResults.slice(0, FETCH_CANDIDATE_LIMIT);
+        const articles = await collectSettled(picked, async (result, index, signal) => {
+            const content = await fetchArticleContent(result.link, signal);
             console.log("网页抓取文章内容: " + content);
             if (content && content.length > 200) {
-                articles.push({
+                return {
                     title: result.title,
                     content: content,
                     source: result.link
-                });
+                };
             }
-            
-            // 避免请求过快
-            if (i < Math.min(3, searchResults.length) - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
+            return null;
+        });
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -997,7 +1161,7 @@ async function fetchMultipleArticles(query) {
  * @param {number} retries - 重试次数，默认2次
  * @returns {Promise<string>} 返回网页主要内容文本
  */
-async function fetchArticleContentWithRetry(url, retries = 2) {
+async function fetchArticleContentWithRetry(url, retries = 1, signal) {
     // 验证和清理URL
     if (!url || !url.startsWith('http')) {
         console.error(`无效的URL: ${url}`);
@@ -1034,9 +1198,9 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 'Referer': 'https://www.google.com/'
             };
             
-            const response = await axios.get(url, {
+            const response = await axios.get(url, withIpv4({
                 headers: headers,
-                timeout: 15000, // 增加到15秒超时
+                timeout: ARTICLE_FETCH_TIMEOUT_MS,
                 maxRedirects: 5,
                 validateStatus: function (status) {
                     // 接受2xx和3xx状态码
@@ -1046,8 +1210,9 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 decompress: true,
                 // 设置响应类型
                 responseType: 'text',
-                responseEncoding: 'utf8'
-            });
+                responseEncoding: 'utf8',
+                signal
+            }));
         
             const $ = cheerio.load(response.data, {
                 decodeEntities: false,
@@ -1137,39 +1302,26 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
                 .replace(/[\r\n]+/g, '\n') // 统一换行符
                 .trim();
             
-            // 如果成功获取到内容，返回
-            if (content.length > 200) {
-                // 限制内容长度（避免token过多）
-                if (content.length > 5000) {
-                    content = content.substring(0, 5000) + '...';
-                }
-                return content;
+            if (content.length > 5000) {
+                content = content.substring(0, 5000) + '...';
             }
-            
-            // 如果内容太短，可能是提取失败，继续重试
-            if (attempt < retries) {
-                console.log(`内容提取不足 (${url})，尝试重试 ${attempt + 1}/${retries}`);
-                await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // 递增延迟
-                continue;
-            }
-            
-            return content; // 即使内容短也返回
+            // 页面能打开但正文太短时，再请求同一 URL 不会变长，直接返回。
+            return content;
             
         } catch (error) {
-            const isLastAttempt = attempt === retries;
+            if (isAbortError(error, signal)) {
+                return '';
+            }
+            const isLastAttempt = attempt === retries || !isConnectionReset(error);
             const errorMsg = error.response 
                 ? `HTTP ${error.response.status}: ${error.response.statusText}`
                 : error.message;
             
             console.error(`抓取网页内容失败 (${url}) [尝试 ${attempt + 1}/${retries + 1}]:`, errorMsg);
             
-            // 如果是最后一次尝试，返回空
             if (isLastAttempt) {
                 return '';
             }
-            
-            // 等待后重试（递增延迟：1s, 2s, 3s...）
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
         }
     }
     
@@ -1181,56 +1333,29 @@ async function fetchArticleContentWithRetry(url, retries = 2) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticlesWithRetry(query) {
+async function fetchMultipleArticlesWithRetry(query, presetResults) {
     try {
-        // 搜索相关新闻
-        const searchResults = await searchNews(query);
+        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query);
         
         if (searchResults.length === 0) {
             return { content: null, articles: [] };
         }
         
-        // 抓取前3个搜索结果的内容（并发控制，但限制并发数）
-        const articles = [];
-        const maxConcurrent = 2; // 最多同时抓取2个
-        const articlesToFetch = Math.min(3, searchResults.length);
-        
-        // 分批处理，避免同时请求太多
-        for (let i = 0; i < articlesToFetch; i += maxConcurrent) {
-            const batch = searchResults.slice(i, i + maxConcurrent);
+        const picked = searchResults.slice(0, FETCH_CANDIDATE_LIMIT);
+        const articles = await collectSettled(picked, async (result, index, signal) => {
+            console.log(`正在抓取 [${index + 1}/${picked.length}]: ${result.title}`);
+            const content = await fetchArticleContentWithRetry(result.link, 1, signal);
             
-            // 并发抓取当前批次
-            const batchPromises = batch.map(async (result, index) => {
-                console.log(`正在抓取 [${i + index + 1}/${articlesToFetch}]: ${result.title}`);
-                const content = await fetchArticleContentWithRetry(result.link, 2); // 最多重试2次
-                
-                if (content && content.length > 200) {
-                    return {
-                        title: result.title,
-                        content: content,
-                        source: result.link
-                    };
-                } else {
-                    console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
-                    return null;
-                }
-            });
-            
-            // 等待当前批次完成
-            const batchResults = await Promise.all(batchPromises);
-            
-            // 过滤掉失败的结果
-            batchResults.forEach(article => {
-                if (article) {
-                    articles.push(article);
-                }
-            });
-            
-            // 批次之间添加延迟，避免请求过快
-            if (i + maxConcurrent < articlesToFetch) {
-                await new Promise(resolve => setTimeout(resolve, 1500));
+            if (content && content.length > 200) {
+                return {
+                    title: result.title,
+                    content: content,
+                    source: result.link
+                };
             }
-        }
+            console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
+            return null;
+        });
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1278,6 +1403,12 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Transfer-Encoding', 'chunked');
     res.setHeader('X-Vercel-Cache-Control', 'no-cache');
+    if (res.socket && typeof res.socket.setNoDelay === 'function') {
+        res.socket.setNoDelay(true);
+    }
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
     
     // 定义响应状态和工具函数
     let isResponseEnded = false;
@@ -1320,6 +1451,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 type: 'sources',
                 articles: cachedArticles 
             })}\n\n`);
+            safeWrite(`: flush${' '.repeat(4096)}\n\n`);
         }
         
         // 分段发送缓存内容
@@ -1365,17 +1497,39 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
         const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        // 步骤2: 搜索并抓取文章内容
-        articlesData = GOOGLE_SEARCH_SWITCH ? await fetchMultipleArticlesWithRetry(title) : await fetchMultipleArticles(title);
+        // 步骤2: 搜索页解析出第一条就写 sources，不等正文，也不等整页下完。
+        const searchStarted = Date.now();
+        let shownSources = [];
+        const publishSources = (results) => {
+            const list = toSourceList(results, FETCH_CANDIDATE_LIMIT);
+            if (list.length === 0 || sameSources(shownSources, list)) return;
+            shownSources = list;
+            safeWrite(`data: ${JSON.stringify({
+                type: 'sources',
+                articles: list
+            })}\n\n`);
+            safeWrite(`: flush${' '.repeat(4096)}\n\n`);
+        };
+        const searchResults = await searchNews(title, publishSources);
+        publishSources(searchResults);
+        console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length} sources=${shownSources.length}`);
+        await new Promise((resolve) => setImmediate(resolve));
+        articlesData = GOOGLE_SEARCH_SWITCH
+            ? await fetchMultipleArticlesWithRetry(title, shownSources)
+            : await fetchMultipleArticles(title, shownSources);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
         
-        // 发送文章链接信息（如果有）
-        if (articlesData.articles && articlesData.articles.length > 0) {
-            safeWrite(`data: ${JSON.stringify({ 
-                type: 'sources',
-                articles: articlesData.articles 
-            })}\n\n`);
+        const finalSources = articlesData.articles || [];
+        if (finalSources.length > 0) {
+            publishSources(finalSources);
         }
+        const persistSearchCache = (content) => {
+            if (!content || !String(content).trim()) return;
+            simpleCache.set(cacheKey, content, 3600);
+            if (shownSources.length > 0) {
+                simpleCache.set(cacheArticlesKey, shownSources, 3600);
+            }
+        };
         
         const articlesContent = articlesData.content;
         if (!articlesContent || articlesContent.length < 200) {
@@ -1461,13 +1615,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                     const data = line.substring(6).trim();
                     
                     if (data === '[DONE]') {
-                        if (fullContent.trim().length > 0) {
-                            simpleCache.set(cacheKey, fullContent, 3600);
-                            // 同时缓存文章链接信息
-                            if (articlesData.articles && articlesData.articles.length > 0) {
-                                simpleCache.set(cacheArticlesKey, articlesData.articles, 3600);
-                            }
-                        }
+                        persistSearchCache(fullContent);
                         safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                         safeEnd();
                         return;
@@ -1501,9 +1649,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                     if (line.startsWith('data: ')) {
                         const data = line.substring(6).trim();
                         if (data === '[DONE]') {
-                            if (fullContent.trim().length > 0) {
-                                simpleCache.set(cacheKey, fullContent, 3600);
-                            }
+                            persistSearchCache(fullContent);
                             break;
                         }
                         try {
@@ -1526,13 +1672,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             }
             
             if (!isResponseEnded) {
-                if (fullContent.trim().length > 0) {
-                    simpleCache.set(cacheKey, fullContent, 3600);
-                    // 同时缓存文章链接信息
-                    if (articlesData.articles && articlesData.articles.length > 0) {
-                        simpleCache.set(cacheArticlesKey, articlesData.articles, 3600);
-                    }
-                }
+                persistSearchCache(fullContent);
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                 safeEnd();
             }
@@ -1633,10 +1773,12 @@ app.get('/favicon.ico', (req, res) => {
     const faviconSvgPath = path.join(__dirname, 'public', 'favicon.svg');
     
     if (fs.existsSync(faviconPath)) {
+        setStaticAssetHeaders(res, faviconPath);
         res.sendFile(faviconPath);
     } else if (fs.existsSync(faviconSvgPath)) {
         // 如果不存在 .ico 文件，提供 .svg 文件
         res.type('image/svg+xml');
+        setStaticAssetHeaders(res, faviconSvgPath);
         res.sendFile(faviconSvgPath);
     } else {
         res.status(204).end(); // 返回 204 No Content
@@ -1650,9 +1792,11 @@ if (BASE_PATH && BASE_PATH !== '/') {
         const faviconSvgPath = path.join(__dirname, 'public', 'favicon.svg');
         
         if (fs.existsSync(faviconPath)) {
+            setStaticAssetHeaders(res, faviconPath);
             res.sendFile(faviconPath);
         } else if (fs.existsSync(faviconSvgPath)) {
             res.type('image/svg+xml');
+            setStaticAssetHeaders(res, faviconSvgPath);
             res.sendFile(faviconSvgPath);
         } else {
             res.status(204).end();
@@ -1669,6 +1813,7 @@ if (BASE_PATH && BASE_PATH !== '/') {
         if (req.params.platform && req.params.platform.startsWith('api')) {
             return res.status(404).send('Not found');
         }
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
     // 根路径重定向到 BASE_PATH
@@ -1689,6 +1834,7 @@ if (BASE_PATH && BASE_PATH !== '/') {
                 return res.status(404).send('Not found');
             }
         }
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
 }
