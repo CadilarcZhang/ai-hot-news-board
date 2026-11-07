@@ -12,6 +12,7 @@ const {
     FETCH_CANDIDATE_LIMIT
 } = require('./lib/searchSources');
 const { extractBaiduNewsResults, collectHtmlUntilResults } = require('./lib/baiduSerp');
+const { buildSearchSummaryCompletion } = require('./lib/summaryCompletion');
 // 冷启动时先解析并握手 www.baidu.com，第一次搜索复用这条连接。
 primeIpv4('www.baidu.com');
 warmHttpsOrigin('www.baidu.com');
@@ -1568,28 +1569,16 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            data: {
-                "model": "deepseek-flash",
-                // "model": "Pro/zai-org/GLM-4.7",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "你是一位专业的新闻摘要专家，擅长基于真实新闻内容生成准确、客观的摘要。你会仔细分析提供的新闻内容，提取关键信息，并生成结构清晰、语言生动的摘要。"
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "stream": true,
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "thinking": { "type": "enabled" },
-                "reasoning_effort": "high",
-                "response_format": {
-                    "type": "text"
+            data: buildSearchSummaryCompletion([
+                {
+                    "role": "system",
+                    "content": "你是一位专业的新闻摘要专家，擅长基于真实新闻内容生成准确、客观的摘要。你会仔细分析提供的新闻内容，提取关键信息，并生成结构清晰、语言生动的摘要。"
+                },
+                {
+                    "role": "user",
+                    "content": prompt
                 }
-            },
+            ]),
             responseType: 'stream',
             timeout: 30000
         });
