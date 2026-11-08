@@ -5,6 +5,8 @@ const {
     toSourceList,
     sameSources,
     isConnectionReset,
+    shouldRetryReset,
+    collectSettled,
     createFetchBudget,
     chooseSearchWinner,
     SEARCH_SOURCE_LIMIT,
@@ -47,6 +49,38 @@ function testBudgetAbortsWhenFull() {
     budget.note({ title: 'b' });
     assert.strictEqual(budget.signal.aborted, true);
     budget.clear();
+}
+
+function testParentAbortDoesNotRetry() {
+    const parent = new AbortController();
+    let calls = 0;
+    const pending = collectSettled(['a', 'b'], (item, index, signal) => {
+        calls += 1;
+        return new Promise((resolve) => {
+            if (signal.aborted) {
+                resolve(null);
+                return;
+            }
+            signal.addEventListener('abort', () => resolve(null), { once: true });
+        });
+    }, { signal: parent.signal, graceMs: 60000 });
+    parent.abort();
+    return pending.then((articles) => {
+        assert.deepStrictEqual(articles, []);
+        assert.strictEqual(calls, 2);
+    }).then(() => collectSettled(['c'], async () => ({ title: 'c', link: 'https://example.com/c' }), { graceMs: 50 }))
+        .then((articles) => {
+            assert.strictEqual(articles.length, 1);
+            assert.strictEqual(calls, 2);
+        });
+}
+
+function testRetryResetSkipsAbortedSignal() {
+    const aborted = new AbortController();
+    aborted.abort();
+    assert.strictEqual(shouldRetryReset({ code: 'ECONNRESET' }, aborted.signal), false);
+    assert.strictEqual(shouldRetryReset({ code: 'ECONNRESET' }, undefined), true);
+    assert.strictEqual(shouldRetryReset({ code: 'ECONNABORTED', message: 'timeout' }, undefined), false);
 }
 
 function testConnectionReset() {
@@ -112,9 +146,15 @@ function run() {
     testSameSources();
     testCandidateLimitCoversFourthHit();
     testBudgetAbortsWhenFull();
+    testRetryResetSkipsAbortedSignal();
     testConnectionReset();
     testChooseSearchWinner();
-    console.log('searchSources tests ok');
+    return testParentAbortDoesNotRetry().then(() => {
+        console.log('searchSources tests ok');
+    });
 }
 
-run();
+run().catch((error) => {
+    console.error(error);
+    process.exit(1);
+});

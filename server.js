@@ -5,8 +5,8 @@ const { withIpv4, primeIpv4, warmHttpsOrigin } = require('./lib/outboundNetwork'
 const {
     toSourceList,
     sameSources,
-    isConnectionReset,
     isAbortError,
+    shouldRetryReset,
     collectSettled,
     chooseSearchWinner,
     FETCH_CANDIDATE_LIMIT
@@ -24,7 +24,9 @@ const path = require('path');
 const fs = require('fs');
 const cheerio = require('cheerio');
 const { hotNewsCache, isUsableHotNewsPayload } = require('./lib/hotNewsCache');
-const { setStaticAssetHeaders } = require('./lib/staticCacheHeaders');
+const { setStaticAssetHeaders, HTML_CACHE_CONTROL } = require('./lib/staticCacheHeaders');
+const { bindClientAbort, linkAbortSignal } = require('./lib/clientDisconnect');
+const { canStoreCompletedContent, decideSearchSummary } = require('./lib/generationFlow');
 const app = express();
 const PORT = process.env.PORT || 3001;
 // 在 Vercel 上，BASE_PATH 应该为空字符串，使用根路径
@@ -183,8 +185,7 @@ console.log('基础路径:', BASE_PATH);
 // 提供静态文件，注意路径前缀
 // 在 Vercel 上，BASE_PATH 为空时使用根路径
 app.use(STATIC_PATH, express.static(path.join(__dirname, 'public'), {
-    index: 'index.html',
-    extensions: ['html'],
+    index: false,
     maxAge: 0,
     setHeaders: setStaticAssetHeaders
 }));
@@ -195,7 +196,7 @@ app.use(STATIC_PATH, express.static(path.join(__dirname, 'public'), {
 if (BASE_PATH && BASE_PATH !== '/') {
     // 创建一个静态文件中间件，只处理静态资源
     const staticMiddleware = express.static(path.join(__dirname, 'public'), {
-        index: false, // 不提供 index.html
+        index: false,
         maxAge: 0,
         setHeaders: setStaticAssetHeaders
     });
@@ -416,6 +417,7 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
     const refresh = req.query.refresh === 'true';
     // API 本身不走 CDN/浏览器长缓存；新鲜度由进程内 3 分钟 TTL 控制。
     res.setHeader('Cache-Control', 'private, no-store');
+    const upstream = bindClientAbort(res);
 
     try {
         if (!refresh) {
@@ -448,7 +450,7 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
         // 5s timeout: fail fast to stale in-process copy instead of hanging the function.
         // family 4: TianAPI from the Node 26 preview runtime exceeded this budget
         // while racing IPv6. Production Node 24 completes on IPv4 in about 2s.
-        const response = await axios.get(apiUrl, withIpv4({ timeout: 5000 }));
+        const response = await axios.get(apiUrl, withIpv4({ timeout: 5000, signal: upstream.signal }));
         // 空列表不要写进 3 分钟缓存，否则一次上游空响应会让该平台一直空白。
         if (!isUsableHotNewsPayload(response.data)) {
             const stale = hotNewsCache.getStale(platform);
@@ -459,10 +461,16 @@ app.get(`${BASE_PATH}/api/hot-news`, async (req, res) => {
             res.setHeader('X-Hot-News-Cache', 'EMPTY');
             return res.json(response.data);
         }
+        if (upstream.signal.aborted) {
+            return;
+        }
         hotNewsCache.set(platform, response.data);
         res.setHeader('X-Hot-News-Cache', refresh ? 'REFRESH' : 'MISS');
         res.json(response.data);
     } catch (error) {
+        if (isAbortError(error, upstream.signal)) {
+            return;
+        }
         const stale = hotNewsCache.getStale(platform);
         if (stale) {
             console.error('获取热搜数据失败，返回过期缓存', {
@@ -539,11 +547,15 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
             }
         }
     };
-    
-    // 处理客户端断开连接
-    req.on('close', () => {
+
+    // 响应写完之后的 close 不能取消这次请求。只在写完之前断开时停上游。
+    const upstream = bindClientAbort(res);
+    let modelStream = null;
+    upstream.signal.addEventListener('abort', () => {
         isResponseEnded = true;
-        console.log('客户端断开连接');
+        if (modelStream && typeof modelStream.destroy === 'function') {
+            modelStream.destroy();
+        }
     });
     
     // 如果有缓存内容，分段发送以模拟流式效果
@@ -558,14 +570,17 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         
         // 模拟流式发送其余段落
         let i = 1;
-        const sendNextChunk = () => {
-            if (i < chunks.length && !isResponseEnded) {
+            const sendNextChunk = () => {
+            if (upstream.signal.aborted || isResponseEnded) {
+                return;
+            }
+            if (i < chunks.length) {
                 if (chunks[i].trim()) {
                     safeWrite(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
                 }
                 i++;
                 setTimeout(sendNextChunk, 100); // 每100ms发送一段，加快速度
-            } else if (!isResponseEnded) {
+            } else {
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
                 safeEnd();
             }
@@ -577,7 +592,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
     
     // 设置请求超时
     const timeout = setTimeout(() => {
-        if (!isResponseEnded) {
+        if (!isResponseEnded && !upstream.signal.aborted) {
             safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务器响应超时。🕒\n\n" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ content: "当前服务繁忙，请稍后再试。您也可以尝试刷新页面或选择其他热搜话题。" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -616,11 +631,13 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                 }
             },
             responseType: 'stream',
-            timeout: 30000 // 增加到30秒超时，适应Vercel环境
+            timeout: 30000, // 增加到30秒超时，适应Vercel环境
+            signal: upstream.signal
         });
         
         // 清除超时计时器
         clearTimeout(timeout);
+        modelStream = response.data;
         
         let fullContent = '';
         let buffer = ''; // 添加缓冲区来处理跨chunk的数据
@@ -651,7 +668,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                     // 检查是否是结束标记
                     if (data === '[DONE]') {
                         // 缓存生成的完整内容，增加缓存时间到24小时
-                        if (fullContent.trim().length > 0) {
+                        if (canStoreCompletedContent(upstream.signal, fullContent)) {
                             simpleCache.set(cacheKey, fullContent, 3600); // 缓存1小时
                         }
                         
@@ -694,7 +711,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
                         const data = line.substring(6).trim();
                         
                         if (data === '[DONE]') {
-                            if (fullContent.trim().length > 0) {
+                            if (canStoreCompletedContent(upstream.signal, fullContent)) {
                                 simpleCache.set(cacheKey, fullContent, 3600);
                             }
                             break;
@@ -721,9 +738,9 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
             }
             
             // 如果没有正常完成，发送完成信号
-            if (!isResponseEnded) {
+            if (!isResponseEnded && !upstream.signal.aborted) {
                 // 缓存生成的完整内容
-                if (fullContent.trim().length > 0) {
+                if (canStoreCompletedContent(upstream.signal, fullContent)) {
                     simpleCache.set(cacheKey, fullContent, 3600);
                 }
                 safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -732,7 +749,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         });
         
         response.data.on('error', (err) => {
-            if (isResponseEnded) return;
+            if (isResponseEnded || upstream.signal.aborted || isAbortError(err, upstream.signal)) return;
             
             console.error('流处理错误:', err);
             
@@ -747,7 +764,7 @@ app.get(`${BASE_PATH}/api/generate`, async (req, res) => {
         // 清除超时计时器
         clearTimeout(timeout);
         
-        if (isResponseEnded) return;
+        if (isResponseEnded || upstream.signal.aborted || isAbortError(error, upstream.signal)) return;
         
         console.error('AI内容生成失败:', error);
         
@@ -936,7 +953,7 @@ async function searchBaidu(query, signal, onHits) {
         pack = packs.find((item) => item && item.results.length > 0) || packs[Math.max(leader, 0)] || packs[0];
     }
 
-    if ((!pack || pack.results.length === 0) && isConnectionReset(pack && pack.error) && !(signal && signal.aborted)) {
+    if ((!pack || pack.results.length === 0) && shouldRetryReset(pack && pack.error, signal)) {
         pack = await fetchBaiduOnce(query, signal, { onResults: forwardHits });
     }
 
@@ -949,7 +966,11 @@ async function searchBaidu(query, signal, onHits) {
     return chosen.results;
 }
 
-async function searchNews(query, onHits) {
+async function searchNews(query, onHits, signal) {
+    if (signal && signal.aborted) {
+        return [];
+    }
+    const unlinkAbort = [];
     try {
         const config = require('./config/index.js');
         const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || config.GOOGLE_SEARCH_API_KEY;
@@ -958,6 +979,7 @@ async function searchNews(query, onHits) {
         const region = process.env.VERCEL_REGION || 'local';
 
         const baiduAbort = new AbortController();
+        unlinkAbort.push(linkAbortSignal(signal, baiduAbort));
         let baiduDone = false;
         let baiduResults = [];
         const baiduTask = searchBaidu(query, baiduAbort.signal, onHits).then((results) => {
@@ -974,6 +996,7 @@ async function searchNews(query, onHits) {
         }
 
         const googleAbort = new AbortController();
+        unlinkAbort.push(linkAbortSignal(signal, googleAbort));
         let googleDone = false;
         let googleResults = [];
         const googleTask = searchGoogle(query, GOOGLE_API_KEY, GOOGLE_SEARCH_ENGINE_ID, googleAbort.signal).then((results) => {
@@ -1013,6 +1036,8 @@ async function searchNews(query, onHits) {
     } catch (error) {
         console.error('搜索新闻失败:', error);
         return [];
+    } finally {
+        unlinkAbort.forEach((unlink) => unlink());
     }
 }
 
@@ -1104,18 +1129,24 @@ async function fetchArticleContent(url, signal) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticles(query, presetResults) {
+async function fetchMultipleArticles(query, presetResults, signal) {
     try {
-        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query);
+        if (signal && signal.aborted) {
+            return { content: null, articles: [], aborted: true };
+        }
+        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query, null, signal);
+        if (signal && signal.aborted) {
+            return { content: null, articles: [], aborted: true };
+        }
         
         if (searchResults.length === 0) {
             return { content: null, articles: [] };
-    }
+        }
         
         // 最多试 5 条，并行。凑够正文后不再等最慢的失败请求。
         const picked = searchResults.slice(0, FETCH_CANDIDATE_LIMIT);
-        const articles = await collectSettled(picked, async (result, index, signal) => {
-            const content = await fetchArticleContent(result.link, signal);
+        const articles = await collectSettled(picked, async (result, index, childSignal) => {
+            const content = await fetchArticleContent(result.link, childSignal);
             console.log("网页抓取文章内容: " + content);
             if (content && content.length > 200) {
                 return {
@@ -1125,7 +1156,11 @@ async function fetchMultipleArticles(query, presetResults) {
                 };
             }
             return null;
-        });
+        }, { signal });
+
+        if (signal && signal.aborted) {
+            return { content: null, articles: [], aborted: true };
+        }
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1334,18 +1369,24 @@ async function fetchArticleContentWithRetry(url, retries = 1, signal) {
  * @param {string} query - 搜索关键词
  * @returns {Promise<Object>} 返回包含文章内容和文章信息的对象
  */
-async function fetchMultipleArticlesWithRetry(query, presetResults) {
+async function fetchMultipleArticlesWithRetry(query, presetResults, signal) {
     try {
-        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query);
+        if (signal && signal.aborted) {
+            return { content: null, articles: [], aborted: true };
+        }
+        const searchResults = Array.isArray(presetResults) ? presetResults : await searchNews(query, null, signal);
+        if (signal && signal.aborted) {
+            return { content: null, articles: [], aborted: true };
+        }
         
         if (searchResults.length === 0) {
             return { content: null, articles: [] };
         }
         
         const picked = searchResults.slice(0, FETCH_CANDIDATE_LIMIT);
-        const articles = await collectSettled(picked, async (result, index, signal) => {
+        const articles = await collectSettled(picked, async (result, index, childSignal) => {
             console.log(`正在抓取 [${index + 1}/${picked.length}]: ${result.title}`);
-            const content = await fetchArticleContentWithRetry(result.link, 1, signal);
+            const content = await fetchArticleContentWithRetry(result.link, 1, childSignal);
             
             if (content && content.length > 200) {
                 return {
@@ -1356,7 +1397,11 @@ async function fetchMultipleArticlesWithRetry(query, presetResults) {
             }
             console.log(`抓取失败或内容不足: ${result.title} (长度: ${content ? content.length : 0})`);
             return null;
-        });
+        }, { signal });
+
+        if (signal && signal.aborted) {
+            return { content: null, articles: [], aborted: true };
+        }
         
         if (articles.length === 0) {
             return { content: null, articles: [] };
@@ -1436,6 +1481,15 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             }
         }
     };
+
+    const upstream = bindClientAbort(res);
+    let modelStream = null;
+    upstream.signal.addEventListener('abort', () => {
+        isResponseEnded = true;
+        if (modelStream && typeof modelStream.destroy === 'function') {
+            modelStream.destroy();
+        }
+    });
     
     // 检查缓存
     const cacheKey = `content-search-${title}`;
@@ -1461,6 +1515,9 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         
         let i = 1;
         const sendNextChunk = () => {
+            if (upstream.signal.aborted || isResponseEnded) {
+                return;
+            }
             if (i < chunks.length && !res.writableEnded) {
                 if (chunks[i].trim()) {
                     safeWrite(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
@@ -1476,14 +1533,9 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         return;
     }
     
-    req.on('close', () => {
-        isResponseEnded = true;
-        console.log('客户端断开连接');
-    });
-    
     // 设置超时
     const timeout = setTimeout(() => {
-        if (!isResponseEnded) {
+        if (!isResponseEnded && !upstream.signal.aborted) {
             safeWrite(`data: ${JSON.stringify({ message: "\n\n很抱歉，搜索和生成内容超时。🕒\n\n" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ message: "当前服务繁忙，请稍后再试。" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -1511,21 +1563,36 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             })}\n\n`);
             safeWrite(`: flush${' '.repeat(4096)}\n\n`);
         };
-        const searchResults = await searchNews(title, publishSources);
+        const searchResults = await searchNews(title, publishSources, upstream.signal);
+        if (upstream.signal.aborted) {
+            clearTimeout(timeout);
+            safeEnd();
+            return;
+        }
         publishSources(searchResults);
         console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length} sources=${shownSources.length}`);
         await new Promise((resolve) => setImmediate(resolve));
+        if (upstream.signal.aborted) {
+            clearTimeout(timeout);
+            safeEnd();
+            return;
+        }
         articlesData = GOOGLE_SEARCH_SWITCH
-            ? await fetchMultipleArticlesWithRetry(title, shownSources)
-            : await fetchMultipleArticles(title, shownSources);
+            ? await fetchMultipleArticlesWithRetry(title, shownSources, upstream.signal)
+            : await fetchMultipleArticles(title, shownSources, upstream.signal);
         console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
+        if (upstream.signal.aborted || articlesData.aborted) {
+            clearTimeout(timeout);
+            safeEnd();
+            return;
+        }
         
         const finalSources = articlesData.articles || [];
         if (finalSources.length > 0) {
             publishSources(finalSources);
         }
         const persistSearchCache = (content) => {
-            if (!content || !String(content).trim()) return;
+            if (!canStoreCompletedContent(upstream.signal, content)) return;
             simpleCache.set(cacheKey, content, 3600);
             if (shownSources.length > 0) {
                 simpleCache.set(cacheArticlesKey, shownSources, 3600);
@@ -1533,7 +1600,13 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         };
         
         const articlesContent = articlesData.content;
-        if (!articlesContent || articlesContent.length < 200) {
+        const summaryDecision = decideSearchSummary(upstream.signal, articlesContent);
+        if (summaryDecision === 'stop') {
+            clearTimeout(timeout);
+            safeEnd();
+            return;
+        }
+        if (summaryDecision === 'fallback') {
             clearTimeout(timeout);
             safeWrite(`data: ${JSON.stringify({ message: "\n\n⚠️ 未能找到足够的新闻内容，将使用AI生成解读。\n\n" })}\n\n`);
             
@@ -1580,10 +1653,12 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 }
             ]),
             responseType: 'stream',
-            timeout: 30000
+            timeout: 30000,
+            signal: upstream.signal
         });
         
         clearTimeout(timeout);
+        modelStream = response.data;
         
         let fullContent = '';
         let buffer = '';
@@ -1668,7 +1743,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         });
         
         response.data.on('error', (err) => {
-            if (isResponseEnded) return;
+            if (isResponseEnded || upstream.signal.aborted || isAbortError(err, upstream.signal)) return;
             clearTimeout(timeout);
             console.error('流处理错误:', err);
             safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，生成摘要时出错。🔄\n\n" })}\n\n`);
@@ -1678,7 +1753,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         
     } catch (error) {
         clearTimeout(timeout);
-        if (isResponseEnded) return;
+        if (isResponseEnded || upstream.signal.aborted || isAbortError(error, upstream.signal)) return;
         
         console.error('基于搜索的内容生成失败:', error);
         safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
@@ -1690,6 +1765,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
 
 // 图片生成API
 app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
+    const upstream = bindClientAbort(res);
     try {
         const { prompt, title } = req.body;
         
@@ -1736,8 +1812,13 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
                 "num_inference_steps": 20,
                 "guidance_scale": 7.5
             },
-            timeout: 30000 // 30秒超时，避免长时间等待
+            timeout: 30000, // 30秒超时，避免长时间等待
+            signal: upstream.signal
         });
+
+        if (upstream.signal.aborted) {
+            return;
+        }
         
         // 获取生成的图片URL
         const imageUrl = response.data.data[0].url;
@@ -1745,8 +1826,13 @@ app.post(`${BASE_PATH}/api/generate-image`, async (req, res) => {
         // 缓存图片URL
         simpleCache.set(cacheKey, imageUrl, 3600); // 缓存24小时
         
-        res.json({ image: imageUrl });
+        if (!res.writableEnded) {
+            res.json({ image: imageUrl });
+        }
     } catch (error) {
+        if (isAbortError(error, upstream.signal) || res.writableEnded) {
+            return;
+        }
         console.error('图片生成失败:', error);
         res.status(500).json({ error: '图片生成失败', message: error.message });
     }
@@ -1802,7 +1888,7 @@ if (BASE_PATH && BASE_PATH !== '/') {
         if (req.params.platform && req.params.platform.startsWith('api')) {
             return res.status(404).send('Not found');
         }
-        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        res.setHeader('Cache-Control', HTML_CACHE_CONTROL);
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
     // 根路径重定向到 BASE_PATH
@@ -1823,16 +1909,18 @@ if (BASE_PATH && BASE_PATH !== '/') {
                 return res.status(404).send('Not found');
             }
         }
-        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        res.setHeader('Cache-Control', HTML_CACHE_CONTROL);
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
 }
 
-// 启动服务器
-app.listen(PORT, () => {
-    console.log(`服务器运行在 http://localhost:${PORT}`);
-    console.log(`应用访问地址: http://localhost:${PORT}${BASE_PATH}`);
-});
+// 启动服务器。被测试 require 时不监听，Vercel 使用导出的 app。
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`服务器运行在 http://localhost:${PORT}`);
+        console.log(`应用访问地址: http://localhost:${PORT}${BASE_PATH}`);
+    });
+}
 
 // 确保在最后导出app以供Vercel使用
 module.exports = app;
