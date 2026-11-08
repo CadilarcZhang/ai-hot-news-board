@@ -9,7 +9,7 @@
     "local": "BASE_PATH=/hot-news node server.js",
     "build": "mkdir -p dist && cp -r public dist/ && cp server.js dist/ && cp -r lib dist/",
     "deploy": "npm run build && cd dist && npm start",
-    "test": "node tests/hotNewsCache.test.js && node tests/searchSources.test.js && node tests/baiduSerp.test.js && node tests/summaryCompletion.test.js && node tests/clientDisconnect.test.js && node tests/staleWork.test.js && node tests/staticHtml.test.js"
+    "test": "node tests/hotNewsCache.test.js && node tests/searchSources.test.js && node tests/baiduSerp.test.js && node tests/summaryCompletion.test.js && node tests/clientDisconnect.test.js && node tests/stalePreview.test.js && node tests/staleWork.test.js && node tests/staticHtml.test.js"
   },
   "keywords": [],
   "author": "",

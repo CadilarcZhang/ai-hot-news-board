@@ -423,7 +423,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const eventSources = {};
     const imageAborts = {};
     const hotNewsGate = LatestResponse.createLatestGate();
+    const articleFocus = LatestResponse.createArticleFocus();
     let hotNewsController = null;
+
+    function articleKey(id, title) {
+        return String(id) + '\n' + String(title || '');
+    }
 
     function abortHotNewsFetch() {
         if (hotNewsController) {
@@ -918,6 +923,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // 获取热搜数据
     function fetchHotNews(platform = 'networkhot', refresh = false) {
         const ticket = hotNewsGate.issue();
+        articleFocus.beginList();
         abortHotNewsFetch();
         const controller = new AbortController();
         hotNewsController = controller;
@@ -945,24 +951,27 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (data.code === 200) {
                     renderHotNewsList(data.result.list);
 
+                    const shouldPreview = articleFocus.watchAutoPreview(function () {
+                        return ticket.isCurrent();
+                    });
                     if (targetNewsId) {
-                        setTimeout(() => {
-                            if (!ticket.isCurrent()) return;
+                        articleFocus.scheduleWhen(300, shouldPreview, function () {
                             selectAndSaveHistory(parseInt(targetNewsId));
-                        }, 300);
+                        });
                     } else {
-                        setTimeout(() => {
-                            if (!ticket.isCurrent()) return;
+                        articleFocus.scheduleWhen(300, shouldPreview, function () {
                             previewNews(1);
-                        }, 300);
+                        });
                     }
                 } else {
                     console.error('获取热搜失败:', data.msg || data.error);
                     renderHotNewsList(getFallbackData(platform));
-                    setTimeout(() => {
-                        if (!ticket.isCurrent()) return;
+                    const shouldPreview = articleFocus.watchAutoPreview(function () {
+                        return ticket.isCurrent();
+                    });
+                    articleFocus.scheduleWhen(300, shouldPreview, function () {
                         previewNews(1);
-                    }, 300);
+                    });
                 }
             })
             .catch(error => {
@@ -970,10 +979,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!ticket.isCurrent()) return;
                 console.error('API请求错误:', error);
                 renderHotNewsList(getFallbackData(platform));
-                setTimeout(() => {
-                    if (!ticket.isCurrent()) return;
+                const shouldPreview = articleFocus.watchAutoPreview(function () {
+                    return ticket.isCurrent();
+                });
+                articleFocus.scheduleWhen(300, shouldPreview, function () {
                     selectNewsByIndex(1);
-                }, 300);
+                });
             });
     }
 
@@ -1109,6 +1120,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
 
+                articleFocus.noteUserChoice(articleKey(index + 1, title));
+
                 // 移除其他项目的active类
                 document.querySelectorAll('.hot-item').forEach(item => {
                     item.classList.remove('active');
@@ -1223,6 +1236,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (platform === 'history') {
                     // 历史 Tab：丢掉还在飞的热搜响应，避免它把列表和文章改回去。
                     hotNewsGate.invalidate();
+                    articleFocus.beginList();
                     abortHotNewsFetch();
                     stopAllGenerations();
                     historyList.style.display = 'block';
@@ -1601,9 +1615,10 @@ document.addEventListener('DOMContentLoaded', function () {
         // 生成图片
         if (!imageContainer.innerHTML.trim()) {
             createSVGImage(newsId, title, heat);
-            setTimeout(() => {
+            const shouldImage = articleFocus.watchCachedImage(articleKey(newsId, title));
+            articleFocus.scheduleWhen(500, shouldImage, function () {
                 generateImageForContent(newsId, title, cachedData.content, heat);
-            }, 500);
+            });
         }
     }
 
