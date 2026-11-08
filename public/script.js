@@ -421,6 +421,99 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     const eventSources = {};
+    const imageAborts = {};
+    const hotNewsGate = LatestResponse.createLatestGate();
+    const articleFocus = LatestResponse.createArticleFocus();
+    let hotNewsController = null;
+
+    function articleKey(id, title) {
+        return String(id) + '\n' + String(title || '');
+    }
+
+    function abortHotNewsFetch() {
+        if (hotNewsController) {
+            hotNewsController.abort();
+            hotNewsController = null;
+        }
+    }
+
+    function closeEventSource(key) {
+        const source = eventSources[key];
+        if (!source) return false;
+        source.__retired = true;
+        source.close();
+        delete eventSources[key];
+        return true;
+    }
+
+    function abortImage(key) {
+        const controller = imageAborts[key];
+        if (!controller) return;
+        controller.abort();
+        delete imageAborts[key];
+    }
+
+    function clearIncompleteArticle(key) {
+        if (String(key).indexOf('mobile-') === 0) {
+            const id = String(key).slice('mobile-'.length);
+            const text = document.querySelector(`[data-id="mobile-news-${id}"] .mobile-text-content`);
+            if (text) text.innerHTML = '';
+            return;
+        }
+        const card = document.getElementById(`news-${key}`);
+        const text = card && card.querySelector('.text-content');
+        if (text) text.innerHTML = '';
+    }
+
+    function stopGeneration(key) {
+        const hadStream = closeEventSource(key);
+        abortImage(key);
+        if (hadStream) clearIncompleteArticle(key);
+    }
+
+    function stopAllGenerations() {
+        Object.keys(eventSources).forEach(stopGeneration);
+        Object.keys(imageAborts).forEach(abortImage);
+    }
+
+    function stopOtherGenerations(activeKey) {
+        Object.keys(eventSources).forEach((key) => {
+            if (key !== activeKey) stopGeneration(key);
+        });
+        Object.keys(imageAborts).forEach((key) => {
+            if (key !== activeKey) abortImage(key);
+        });
+    }
+
+    function isLiveSource(key, source) {
+        return eventSources[key] === source && !source.__retired;
+    }
+
+    function requestGeneratedImage(key, title, handlers) {
+        abortImage(key);
+        const controller = new AbortController();
+        imageAborts[key] = controller;
+        const prompt = `新闻图片，主题：${title}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
+        fetch(`${SERVER_URL}/api/generate-image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt, title: title }),
+            signal: controller.signal
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (controller.signal.aborted || imageAborts[key] !== controller) return;
+                delete imageAborts[key];
+                if (data.image) handlers.onImage(data.image);
+                else if (handlers.onMissing) handlers.onMissing();
+            })
+            .catch(error => {
+                if (error && error.name === 'AbortError') return;
+                if (controller.signal.aborted || imageAborts[key] !== controller) return;
+                delete imageAborts[key];
+                if (handlers.onError) handlers.onError(error);
+            });
+    }
 
     // 检测是否为移动设备
     const isMobile = window.innerWidth <= 768;
@@ -829,6 +922,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 获取热搜数据
     function fetchHotNews(platform = 'networkhot', refresh = false) {
+        const ticket = hotNewsGate.issue();
+        articleFocus.beginList();
+        abortHotNewsFetch();
+        const controller = new AbortController();
+        hotNewsController = controller;
+        stopAllGenerations();
         currentPlatform = platform;
         targetNewsId = null;
 
@@ -843,35 +942,49 @@ document.addEventListener('DOMContentLoaded', function () {
         const hotNewsList = document.getElementById('hot-news-list');
         hotNewsList.innerHTML = '<div class="loading-list">加载热搜数据中...</div>';
 
-        fetch(`${SERVER_URL}/api/hot-news?platform=${platform}&refresh=${refresh}`)
+        fetch(`${SERVER_URL}/api/hot-news?platform=${platform}&refresh=${refresh}`, {
+            signal: controller.signal
+        })
             .then(response => response.json())
             .then(data => {
+                if (!ticket.isCurrent()) return;
                 if (data.code === 200) {
                     renderHotNewsList(data.result.list);
 
+                    const shouldPreview = articleFocus.watchAutoPreview(function () {
+                        return ticket.isCurrent();
+                    });
                     if (targetNewsId) {
-                        setTimeout(() => {
+                        articleFocus.scheduleWhen(300, shouldPreview, function () {
                             selectAndSaveHistory(parseInt(targetNewsId));
-                        }, 300);
+                        });
                     } else {
-                        setTimeout(() => {
+                        articleFocus.scheduleWhen(300, shouldPreview, function () {
                             previewNews(1);
-                        }, 300);
+                        });
                     }
                 } else {
                     console.error('获取热搜失败:', data.msg || data.error);
                     renderHotNewsList(getFallbackData(platform));
-                    setTimeout(() => {
+                    const shouldPreview = articleFocus.watchAutoPreview(function () {
+                        return ticket.isCurrent();
+                    });
+                    articleFocus.scheduleWhen(300, shouldPreview, function () {
                         previewNews(1);
-                    }, 300);
+                    });
                 }
             })
             .catch(error => {
+                if (error && error.name === 'AbortError') return;
+                if (!ticket.isCurrent()) return;
                 console.error('API请求错误:', error);
                 renderHotNewsList(getFallbackData(platform));
-                setTimeout(() => {
+                const shouldPreview = articleFocus.watchAutoPreview(function () {
+                    return ticket.isCurrent();
+                });
+                articleFocus.scheduleWhen(300, shouldPreview, function () {
                     selectNewsByIndex(1);
-                }, 300);
+                });
             });
     }
 
@@ -959,13 +1072,8 @@ document.addEventListener('DOMContentLoaded', function () {
             contentArea.appendChild(placeholder);
         }
 
-        // 清除所有EventSource连接
-        Object.keys(eventSources).forEach(key => {
-            if (eventSources[key]) {
-                eventSources[key].close();
-                delete eventSources[key];
-            }
-        });
+        // 换列表时停掉上一轮的流和配图，避免旧响应写进新平台。
+        stopAllGenerations();
 
         // 移除所有移动端内容
         document.querySelectorAll('.mobile-content').forEach(el => el.remove());
@@ -1011,6 +1119,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (isMobile && e.target.closest('.toggle-btn')) {
                     return;
                 }
+
+                articleFocus.noteUserChoice(articleKey(index + 1, title));
 
                 // 移除其他项目的active类
                 document.querySelectorAll('.hot-item').forEach(item => {
@@ -1124,7 +1234,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 this.classList.add('active');
 
                 if (platform === 'history') {
-                    // 历史 Tab：显示历史列表，隐藏热搜列表
+                    // 历史 Tab：丢掉还在飞的热搜响应，避免它把列表和文章改回去。
+                    hotNewsGate.invalidate();
+                    articleFocus.beginList();
+                    abortHotNewsFetch();
+                    stopAllGenerations();
                     historyList.style.display = 'block';
                     hotNewsList.style.display = 'none';
                     renderHistoryList();
@@ -1244,11 +1358,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
         generateImageForContent(newsId, title, fullContent, heat);
 
-        // 关闭之前的EventSource连接（如果存在）
-        if (eventSources[newsId]) {
-            eventSources[newsId].close();
-            delete eventSources[newsId];
-        }
+        // 同一条文章只保留最新的一条流
+        closeEventSource(String(newsId));
 
         try {
             // 检查是否启用联网搜索模式
@@ -1269,6 +1380,7 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             eventSource.onmessage = function (event) {
+                if (!isLiveSource(newsId, eventSource)) return;
                 try {
                     const data = JSON.parse(event.data);
                     loadingElement.style.display = 'none';
@@ -1345,10 +1457,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             }
                         }
 
-                        if (eventSources[newsId]) {
-                            eventSources[newsId].close();
-                            delete eventSources[newsId];
-                        }
+                        closeEventSource(newsId);
                     }
                 } catch (e) {
                     console.error('解析事件数据出错:', e);
@@ -1356,12 +1465,10 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             eventSource.onerror = function (error) {
+                if (!isLiveSource(newsId, eventSource)) return;
                 console.error(`EventSource错误 (${newsId}):`, error);
 
-                if (eventSources[newsId]) {
-                    eventSources[newsId].close();
-                    delete eventSources[newsId];
-                }
+                closeEventSource(newsId);
 
                 // 显示错误信息
                 contentContainer.innerHTML = `
@@ -1427,58 +1534,37 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        // 构建提示词，使其更具体和相关
-        // const prompt = `新闻图片，主题：${title}，内容：${content}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
-        const prompt = `新闻图片，主题：${title}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
-
         // 显示加载状态
         imageContainer.innerHTML = '<div class="image-loading"></div>';
 
-        // 调用图片生成API
-        fetch(`${SERVER_URL}/api/generate-image`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                prompt: prompt,
-                title: title
-            })
-        })
-            .then(response => response.json())
-            .then(data => {
-                if (data.image) {
-                    // 显示生成的图片
-                    const imageDisplayTime = performance.now();
-                    imageContainer.innerHTML = `<img src="${data.image}" alt="${title}" class="generated-image">`;
-                    imageContainer.classList.add('loaded');
-
-                    // 记录图片加载性能
-                    trackPerformance('图片显示时间', imageDisplayTime - aiContentStartTime, 'ms');
-
-                    // 保存到本地缓存
-                    try {
-                        const cacheData = {
-                            url: data.image,
-                            expiry: Date.now() + (60 * 60 * 1000) // 1小时过期
-                        };
-                        localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
-                        console.log(`图片已保存到本地缓存: ${title}`);
-                    } catch (e) {
-                        console.error('保存图片到本地缓存失败:', e);
-                    }
-                } else {
-                    // 如果没有成功生成图片，保留SVG图片
-                    console.log('图片生成失败，保留SVG图片');
-                    createSVGImage(newsId, title, heat);
-                }
+        requestGeneratedImage(String(newsId), title, {
+            onImage(imageUrl) {
+                const imageDisplayTime = performance.now();
+                imageContainer.innerHTML = `<img src="${imageUrl}" alt="${title}" class="generated-image">`;
+                imageContainer.classList.add('loaded');
                 imageContainer.style.display = 'block';
-            })
-            .catch(error => {
-                console.error('图片生成出错:', error);
-                // 保留SVG图片作为备用
+                trackPerformance('图片显示时间', imageDisplayTime - aiContentStartTime, 'ms');
+                try {
+                    const cacheData = {
+                        url: imageUrl,
+                        expiry: Date.now() + (60 * 60 * 1000) // 1小时过期
+                    };
+                    localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
+                    console.log(`图片已保存到本地缓存: ${title}`);
+                } catch (e) {
+                    console.error('保存图片到本地缓存失败:', e);
+                }
+            },
+            onMissing() {
+                console.log('图片生成失败，保留SVG图片');
                 createSVGImage(newsId, title, heat);
-            });
+                imageContainer.style.display = 'block';
+            },
+            onError(error) {
+                console.error('图片生成出错:', error);
+                createSVGImage(newsId, title, heat);
+            }
+        });
     }
 
     // 渲染缓存的文章内容
@@ -1529,9 +1615,10 @@ document.addEventListener('DOMContentLoaded', function () {
         // 生成图片
         if (!imageContainer.innerHTML.trim()) {
             createSVGImage(newsId, title, heat);
-            setTimeout(() => {
+            const shouldImage = articleFocus.watchCachedImage(articleKey(newsId, title));
+            articleFocus.scheduleWhen(500, shouldImage, function () {
                 generateImageForContent(newsId, title, cachedData.content, heat);
-            }, 500);
+            });
         }
     }
 
@@ -1738,6 +1825,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         if (isMobile) {
+            stopOtherGenerations(`mobile-${news.id}`);
             // 移动端逻辑
             const listItem = document.querySelector(`.hot-item[data-id="${news.id}"]`);
             if (listItem) {
@@ -1764,8 +1852,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     renderMobileCachedContent(news.id, existingContent, cachedData);
                     existingContent.style.display = 'block';
                 } else if (existingContent && !cachedData) {
-                    // 已有DOM但无缓存（生成中），直接显示
+                    // 已有DOM但无缓存（生成中），直接显示。中断后正文被清空则重新生成。
                     existingContent.style.display = 'block';
+                    const text = existingContent.querySelector('.mobile-text-content');
+                    const mobileKey = `mobile-${news.id}`;
+                    if (text && !text.innerHTML.trim() && !eventSources[mobileKey]) {
+                        generateMobileContent(news.id, news.title, news.heat, existingContent);
+                    }
                 } else {
                     // 无DOM，创建并生成
                     createMobileContent(news.id, news.title, news.heat, listItem);
@@ -1786,6 +1879,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            stopOtherGenerations(String(news.id));
             const newsId = `news-${news.id}`;
             const newsContent = document.getElementById(newsId);
 
@@ -1830,18 +1924,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // 历史记录点击：只用历史记录的 content（没有就直接 API）
             // 普通点击：优先 localStorage 缓存（有过期时间）
+            const streamKey = String(news.id);
             if (news.isHistory) {
                 if (news.content) {
                     renderCachedContent(newsContent, news.id, news.content, news.title, news.heat);
-                } else {
+                } else if (!eventSources[streamKey]) {
                     generateAIContent(news.id, news.title);
                 }
             } else {
                 const cachedData = getCachedContent(news.title);
                 if (cachedData) {
                     renderCachedContent(newsContent, news.id,cachedData, news.title, news.heat);
-                } else if (textContent && !textContent.innerHTML.trim()) {
+                } else if (textContent && !textContent.innerHTML.trim() && !eventSources[streamKey]) {
                     generateAIContent(news.id, news.title);
+                } else if (!eventSources[streamKey] && !imageAborts[streamKey]) {
+                    const imageContainer = newsContent.querySelector('.image-container');
+                    const hasImage = imageContainer && imageContainer.querySelector('img');
+                    if (imageContainer && !hasImage) {
+                        const hotItem = document.querySelector(`.hot-item[data-id="${news.id}"]`);
+                        const heat = hotItem && hotItem.querySelector('.hot-heat')
+                            ? hotItem.querySelector('.hot-heat').textContent
+                            : (news.heat || '');
+                        generateImageForContent(news.id, news.title, '', heat);
+                    }
                 }
             }
         }
@@ -1981,11 +2086,7 @@ document.addEventListener('DOMContentLoaded', function () {
         generateMobileImage(newsId, title, fullContent, heat, imageContainer);
 
 
-        // 关闭之前的EventSource连接（如果存在）
-        if (eventSources[`mobile-${newsId}`]) {
-            eventSources[`mobile-${newsId}`].close();
-            delete eventSources[`mobile-${newsId}`];
-        }
+        closeEventSource(`mobile-${newsId}`);
 
         try {
             // 检查是否启用联网搜索模式
@@ -2004,6 +2105,7 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             eventSource.onmessage = function (event) {
+                if (!isLiveSource(`mobile-${newsId}`, eventSource)) return;
                 try {
                     const data = JSON.parse(event.data);
                     loading.style.display = 'none';
@@ -2080,10 +2182,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         // 生成图片
                         // generateMobileImage(newsId, title, fullContent, heat, imageContainer);
 
-                        if (eventSources[`mobile-${newsId}`]) {
-                            eventSources[`mobile-${newsId}`].close();
-                            delete eventSources[`mobile-${newsId}`];
-                        }
+                        closeEventSource(`mobile-${newsId}`);
                     }
                 } catch (e) {
                     console.error('解析事件数据出错:', e);
@@ -2091,12 +2190,10 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             eventSource.onerror = function (error) {
+                if (!isLiveSource(`mobile-${newsId}`, eventSource)) return;
                 console.error(`移动端EventSource错误 (${newsId}):`, error);
 
-                if (eventSources[`mobile-${newsId}`]) {
-                    eventSources[`mobile-${newsId}`].close();
-                    delete eventSources[`mobile-${newsId}`];
-                }
+                closeEventSource(`mobile-${newsId}`);
 
                 // 显示错误信息
                 loading.style.display = 'none';
@@ -2156,43 +2253,24 @@ document.addEventListener('DOMContentLoaded', function () {
         // 创建SVG占位图
         createMobileSVGImage(newsId, title, heat, imageContainer);
 
-        // 构建提示词
-        const prompt = `新闻图片，主题：${title}，高质量新闻照片，清晰细节，专业新闻风格, 要写实风格，不要卡通风格`;
-
-        // 调用图片生成API
-        fetch(`${SERVER_URL}/api/generate-image`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                prompt: prompt,
-                title: title
-            })
-        })
-            .then(response => response.json())
-            .then(data => {
-                if (data.image) {
-                    // 显示生成的图片
-                    imageContainer.innerHTML = `<img src="${data.image}" alt="${title}" class="generated-image">`;
-
-                    // 保存到本地缓存
-                    try {
-                        const cacheData = {
-                            url: data.image,
-                            expiry: Date.now() + (60 * 60 * 1000) // 1小时过期
-                        };
-                        localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
-                        console.log(`图片已保存到本地缓存: ${title}`);
-                    } catch (e) {
-                        console.error('保存图片到本地缓存失败:', e);
-                    }
+        requestGeneratedImage(`mobile-${newsId}`, title, {
+            onImage(imageUrl) {
+                imageContainer.innerHTML = `<img src="${imageUrl}" alt="${title}" class="generated-image">`;
+                try {
+                    const cacheData = {
+                        url: imageUrl,
+                        expiry: Date.now() + (60 * 60 * 1000) // 1小时过期
+                    };
+                    localStorage.setItem(localCacheKey, JSON.stringify(cacheData));
+                    console.log(`图片已保存到本地缓存: ${title}`);
+                } catch (e) {
+                    console.error('保存图片到本地缓存失败:', e);
                 }
-            })
-            .catch(error => {
+            },
+            onError(error) {
                 console.error('移动端图片生成出错:', error);
-                // SVG图片已作为占位符显示
-            });
+            }
+        });
     }
 
     // 创建移动端SVG图片

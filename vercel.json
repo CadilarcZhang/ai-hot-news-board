@@ -38,6 +38,20 @@
       "dest": "/public/$1"
     },
     {
+      "src": "/",
+      "headers": {
+        "Cache-Control": "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
+      },
+      "dest": "/public/index.html"
+    },
+    {
+      "src": "/(weibo|toutiao|douyin)/?",
+      "headers": {
+        "Cache-Control": "public, max-age=60, s-maxage=60, stale-while-revalidate=60"
+      },
+      "dest": "/public/index.html"
+    },
+    {
       "src": "/(.*)",
       "dest": "/server.js"
     }
