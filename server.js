@@ -13,6 +13,13 @@ const {
 } = require('./lib/searchSources');
 const { extractBaiduNewsResults, collectHtmlUntilResults } = require('./lib/baiduSerp');
 const { buildSearchSummaryCompletion } = require('./lib/summaryCompletion');
+const {
+    createDeepseekSearchGate,
+    summaryCacheKey,
+    articlesCacheKey,
+    providerMessage,
+    SUMMARY_TTL_SECONDS
+} = require('./lib/deepseekSearch');
 // 冷启动时先解析并握手 www.baidu.com，第一次搜索复用这条连接。
 primeIpv4('www.baidu.com');
 warmHttpsOrigin('www.baidu.com');
@@ -225,6 +232,10 @@ const TIANAPI_KEY = process.env.TIANAPI_KEY;
 // AI API密钥
 const AI_API_KEY = process.env.AI_API_KEY; // SiliconFlow（备用）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // DeepSeek 官方
+const deepseekSearchGate = createDeepseekSearchGate({
+    getApiKey: () => DEEPSEEK_API_KEY,
+    httpPost: (config) => axios(config)
+});
 
 // 省份名称中英文映射表
 const provinceNameMap = {
@@ -1413,6 +1424,8 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
     
     // 定义响应状态和工具函数
     let isResponseEnded = false;
+    let modelStream = null;
+    const userAbort = new AbortController();
     
     const safeWrite = (data) => {
         if (!isResponseEnded && !res.writableEnded && res.writable) {
@@ -1436,17 +1449,25 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             }
         }
     };
+
+    res.on('close', () => {
+        if (!res.writableFinished) {
+            isResponseEnded = true;
+            userAbort.abort();
+            if (modelStream && typeof modelStream.destroy === 'function') {
+                modelStream.destroy();
+            }
+        }
+    });
     
-    // 检查缓存
-    const cacheKey = `content-search-${title}`;
-    const cacheArticlesKey = `articles-search-${title}`;
-    let cachedContent = simpleCache.get(cacheKey);
-    let cachedArticles = simpleCache.get(cacheArticlesKey);
+    const summaryKey = summaryCacheKey(title);
+    const articlesKey = articlesCacheKey(title);
+    let cachedContent = simpleCache.get(summaryKey);
+    let cachedArticles = simpleCache.get(articlesKey);
     
     if (cachedContent) {
-        console.log(`从缓存获取网页搜索生成内容: ${title}`);
+        console.log(`DeepSeek搜索缓存命中 摘要 ${title}`);
         
-        // 如果有缓存的文章链接，先发送
         if (cachedArticles && cachedArticles.length > 0) {
             safeWrite(`data: ${JSON.stringify({ 
                 type: 'sources',
@@ -1455,12 +1476,12 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             safeWrite(`: flush${' '.repeat(4096)}\n\n`);
         }
         
-        // 分段发送缓存内容
         const chunks = cachedContent.split('\n');
         safeWrite(`data: ${JSON.stringify({ content: chunks[0] })}\n\n`);
         
         let i = 1;
         const sendNextChunk = () => {
+            if (userAbort.signal.aborted || isResponseEnded) return;
             if (i < chunks.length && !res.writableEnded) {
                 if (chunks[i].trim()) {
                     safeWrite(`data: ${JSON.stringify({ content: chunks[i] })}\n\n`);
@@ -1476,70 +1497,59 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         return;
     }
     
-    req.on('close', () => {
-        isResponseEnded = true;
-        console.log('客户端断开连接');
-    });
-    
-    // 设置超时
     const timeout = setTimeout(() => {
         if (!isResponseEnded) {
+            userAbort.abort();
             safeWrite(`data: ${JSON.stringify({ message: "\n\n很抱歉，搜索和生成内容超时。🕒\n\n" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ message: "当前服务繁忙，请稍后再试。" })}\n\n`);
             safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
             safeEnd();
         }
-    }, 60000); // 60秒超时（搜索需要更长时间）
-    
-    // 定义articlesData变量，以便在后续作用域中使用
-    let articlesData = { content: null, articles: [], message: null };
+    }, 60000);
     
     try {
-        // 步骤1: 发送搜索提示
         safeWrite(`data: ${JSON.stringify({ message: "🔍 正在搜索相关新闻..." })}\n\n`);
-        const GOOGLE_SEARCH_SWITCH = process.env.GOOGLE_SEARCH_SWITCH || false;
-        // 步骤2: 搜索页解析出第一条就写 sources，不等正文，也不等整页下完。
         const searchStarted = Date.now();
-        let shownSources = [];
-        const publishSources = (results) => {
-            const list = toSourceList(results, FETCH_CANDIDATE_LIMIT);
-            if (list.length === 0 || sameSources(shownSources, list)) return;
-            shownSources = list;
+        const prepared = await deepseekSearchGate.load(title, userAbort.signal);
+        if (prepared.aborted || userAbort.signal.aborted || isResponseEnded) {
+            clearTimeout(timeout);
+            safeEnd();
+            return;
+        }
+        if (!prepared.ok) {
+            clearTimeout(timeout);
+            console.log(`DeepSeek搜索失败 kind=${prepared.kind || 'provider'} status=${prepared.status || 0} calls=${prepared.calls || 0}`);
+            safeWrite(`data: ${JSON.stringify({ message: `\n\n${providerMessage(prepared.kind)}\n\n` })}\n\n`);
+            safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+            safeEnd();
+            return;
+        }
+        const shownSources = (prepared.articles || []).map((article) => ({
+            title: article.title,
+            link: article.link
+        }));
+        console.log(`DeepSeek搜索完成 cache=${prepared.fromCache ? 1 : 0} calls=${prepared.calls || 0} ms=${Date.now() - searchStarted} results=${prepared.resultCount || shownSources.length} accepted=${shownSources.length} text=${prepared.textLength || 0}`);
+        if (shownSources.length > 0) {
             safeWrite(`data: ${JSON.stringify({
                 type: 'sources',
-                articles: list
+                articles: shownSources
             })}\n\n`);
             safeWrite(`: flush${' '.repeat(4096)}\n\n`);
-        };
-        const searchResults = await searchNews(title, publishSources);
-        publishSources(searchResults);
-        console.log(`搜索阶段完成 ${Date.now() - searchStarted}ms hits=${searchResults.length} sources=${shownSources.length}`);
-        await new Promise((resolve) => setImmediate(resolve));
-        articlesData = GOOGLE_SEARCH_SWITCH
-            ? await fetchMultipleArticlesWithRetry(title, shownSources)
-            : await fetchMultipleArticles(title, shownSources);
-        console.log("合并多篇文章内容: " + JSON.stringify(articlesData));
-        
-        const finalSources = articlesData.articles || [];
-        if (finalSources.length > 0) {
-            publishSources(finalSources);
         }
         const persistSearchCache = (content) => {
+            if (!prepared.sufficient) return;
+            if (userAbort.signal.aborted || isResponseEnded) return;
             if (!content || !String(content).trim()) return;
-            simpleCache.set(cacheKey, content, 3600);
+            simpleCache.set(summaryKey, content, SUMMARY_TTL_SECONDS);
             if (shownSources.length > 0) {
-                simpleCache.set(cacheArticlesKey, shownSources, 3600);
+                simpleCache.set(articlesKey, shownSources, SUMMARY_TTL_SECONDS);
             }
         };
         
-        const articlesContent = articlesData.content;
-        if (!articlesContent || articlesContent.length < 200) {
+        const articlesContent = prepared.textLength > 0 ? prepared.merged : null;
+        if (!prepared.sufficient) {
             clearTimeout(timeout);
             safeWrite(`data: ${JSON.stringify({ message: "\n\n⚠️ 未能找到足够的新闻内容，将使用AI生成解读。\n\n" })}\n\n`);
-            
-            // 如果搜索失败，回退到原有的生成方式
-            // 这里可以调用原有的生成逻辑，或者直接结束
-            // 为了保持功能独立，我们继续使用搜索到的内容，即使内容较少
         } else {
             safeWrite(`data: ${JSON.stringify({ message: "✅ 已找到相关新闻，正在生成摘要...\n\n" })}\n\n`);
         }
@@ -1560,7 +1570,6 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 请生成摘要：`
             : `请为热搜话题"${title}"生成一份新闻解读。由于未能获取到足够的真实新闻内容，请基于你的知识生成一份客观的分析。要求语言生动有趣，包含表情符号，至少3-4个段落。`;
         
-        // 创建AI API请求
         const response = await axios({
             method: 'post',
             // SiliconFlow: url: 'https://api.siliconflow.cn/v1/chat/completions', Authorization: AI_API_KEY, model: 'deepseek-ai/DeepSeek-V3.2-Exp'
@@ -1580,10 +1589,12 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
                 }
             ]),
             responseType: 'stream',
-            timeout: 30000
+            timeout: 30000,
+            signal: userAbort.signal
         });
         
         clearTimeout(timeout);
+        modelStream = response.data;
         
         let fullContent = '';
         let buffer = '';
@@ -1678,7 +1689,7 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
         
     } catch (error) {
         clearTimeout(timeout);
-        if (isResponseEnded) return;
+        if (userAbort.signal.aborted || isResponseEnded) return;
         
         console.error('基于搜索的内容生成失败:', error);
         safeWrite(`data: ${JSON.stringify({ content: "\n\n很抱歉，服务暂时不可用。⚠️\n\n" })}\n\n`);
