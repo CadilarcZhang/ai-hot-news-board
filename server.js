@@ -1528,7 +1528,16 @@ app.get(`${BASE_PATH}/api/generate-with-search`, async (req, res) => {
             title: article.title,
             link: article.link
         }));
-        console.log(`DeepSeek搜索完成 cache=${prepared.fromCache ? 1 : 0} calls=${prepared.calls || 0} ms=${Date.now() - searchStarted} results=${prepared.resultCount || shownSources.length} accepted=${shownSources.length} text=${prepared.textLength || 0}`);
+        const dropped = Array.isArray(prepared.dropped) ? prepared.dropped : [];
+        const dropCounts = {};
+        dropped.forEach((item) => {
+            const reason = item && item.reason ? item.reason : 'unknown';
+            dropCounts[reason] = (dropCounts[reason] || 0) + 1;
+        });
+        const dropText = Object.keys(dropCounts).length
+            ? Object.entries(dropCounts).map(([reason, count]) => `${reason}:${count}`).join(',')
+            : '0';
+        console.log(`DeepSeek搜索完成 cache=${prepared.fromCache ? 1 : 0} calls=${prepared.calls || 0} ms=${Date.now() - searchStarted} results=${prepared.resultCount || shownSources.length} accepted=${shownSources.length} text=${prepared.textLength || 0} dropped=${dropText}`);
         if (shownSources.length > 0) {
             safeWrite(`data: ${JSON.stringify({
                 type: 'sources',

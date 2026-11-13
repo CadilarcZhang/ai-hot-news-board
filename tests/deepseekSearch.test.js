@@ -9,6 +9,7 @@ const {
 const {
     SEARCH_URL,
     SEARCH_COUNT,
+    RAW_RESULT_TTL_MS,
     requestDeepseekSearch,
     createDeepseekSearchGate,
     providerMessage,
@@ -221,6 +222,110 @@ function testConcurrentDedupAndIndependentCancel() {
     });
 }
 
+function testNavigationOverlapDoesNotCount() {
+    const headline = '官方通报外国人高铁上探头吸烟';
+    const selected = selectArticles([
+        article(headline, '2026-11-13T00:00:00Z', [
+            '这是一篇只讨论股市指数涨跌的评论，没有提到列车或吸烟。'.repeat(6),
+            '热门推荐',
+            headline
+        ].join('\n'))
+    ], headline, NOW);
+    assert.strictEqual(selected.articles.length, 0);
+    assert.strictEqual(selected.dropped[0].reason, 'body');
+    assert.ok(!selected.merged.includes(headline));
+}
+
+function testBeijingDayBoundaryKeepsFreshAndDropsStale() {
+    const headline = '中美农业合作藏着三个关键词';
+    const body = `${headline}。双方谈了采购、技术和标准。`.repeat(8);
+    const beijingEarlyMorning = Date.parse('2026-11-13T17:30:00.000Z');
+    const threeDays = selectArticles([
+        article(headline, '2026-11-11T00:00:00Z', body)
+    ], QUERY, beijingEarlyMorning);
+    assert.strictEqual(threeDays.dropped[0].reason, 'stale');
+
+    const today = selectArticles([
+        article(headline, '2026-11-14', body)
+    ], QUERY, beijingEarlyMorning);
+    assert.strictEqual(today.articles.length, 1);
+    assert.strictEqual(today.sufficient, true);
+
+    const unknownDate = selectArticles([
+        article(headline, null, body)
+    ], QUERY, beijingEarlyMorning);
+    assert.strictEqual(unknownDate.articles.length, 1);
+}
+
+function testFilteredNonemptyDoesNotRepayUntilExpiry() {
+    let calls = 0;
+    let nowMs = NOW;
+    const httpPost = () => {
+        calls += 1;
+        return Promise.resolve({
+            status: 200,
+            data: {
+                results: [
+                    article('无关天气新闻', '2026-11-13T00:00:00Z', '今天有雨。'.repeat(40)),
+                    article('中美大豆贸易回顾', '2026-05-01T00:00:00Z', '中美农业合作藏着三个关键词'.repeat(30))
+                ]
+            }
+        });
+    };
+    const gate = createDeepseekSearchGate({
+        getApiKey: () => 'test-key',
+        now: () => nowMs,
+        httpPost
+    });
+    return gate.load(QUERY).then((first) => {
+        assert.strictEqual(first.sufficient, false);
+        assert.strictEqual(first.articles.length, 0);
+        assert.ok(!first.results);
+        assert.strictEqual(calls, 1);
+        return gate.load(QUERY);
+    }).then((second) => {
+        assert.strictEqual(second.fromCache, true);
+        assert.strictEqual(second.calls, 0);
+        assert.strictEqual(second.sufficient, false);
+        assert.strictEqual(calls, 1);
+        nowMs += RAW_RESULT_TTL_MS + 1;
+        return gate.load(QUERY);
+    }).then((third) => {
+        assert.strictEqual(third.fromCache, undefined);
+        assert.strictEqual(calls, 2);
+        const otherInstance = createDeepseekSearchGate({
+            getApiKey: () => 'test-key',
+            now: () => nowMs,
+            httpPost
+        });
+        return otherInstance.load(QUERY);
+    }).then((freshInstance) => {
+        assert.strictEqual(freshInstance.calls, 1);
+        assert.strictEqual(calls, 3);
+    });
+}
+
+function testProviderErrorIsNotCached() {
+    let calls = 0;
+    const gate = createDeepseekSearchGate({
+        getApiKey: () => 'test-key',
+        now: () => NOW,
+        httpPost() {
+            calls += 1;
+            return Promise.resolve({ status: 500, data: {} });
+        }
+    });
+    return gate.load(QUERY).then((first) => {
+        assert.strictEqual(first.ok, false);
+        assert.strictEqual(first.kind, 'provider');
+        return gate.load(QUERY);
+    }).then((second) => {
+        assert.strictEqual(second.ok, false);
+        assert.strictEqual(calls, 2);
+        assert.strictEqual(gate.cacheSize(), 0);
+    });
+}
+
 function testLastWaiterAbortDoesNotCache() {
     const pending = deferred();
     let calls = 0;
@@ -256,6 +361,10 @@ Promise.resolve()
     .then(() => testRequestShapeAndNoRetry())
     .then(() => testStatuses())
     .then(() => testEmptyIsNotCachedAndCacheHitSkipsCall())
+    .then(() => testNavigationOverlapDoesNotCount())
+    .then(() => testBeijingDayBoundaryKeepsFreshAndDropsStale())
+    .then(() => testFilteredNonemptyDoesNotRepayUntilExpiry())
+    .then(() => testProviderErrorIsNotCached())
     .then(() => testConcurrentDedupAndIndependentCancel())
     .then(() => testLastWaiterAbortDoesNotCache())
     .then(() => {
