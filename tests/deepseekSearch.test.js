@@ -222,6 +222,87 @@ function testConcurrentDedupAndIndependentCancel() {
     });
 }
 
+function smokingBody() {
+    return '铁路部门通报，一名外籍乘客把身体探出高铁车厢抽烟，列车工作人员当场制止并移交处理。现场视频显示该乘客在运行区间探头吸烟，已被责令离开车厢连接处。'.repeat(3);
+}
+
+function testSyntheticRewritePasses() {
+    // 构造样本，不是供应商返回的原文。
+    const query = '官方通报外国人高铁上探头吸烟';
+    const selected = selectArticles([
+        article('官方通报外国人高铁上探头吸烟', '2026-11-13T00:00:00Z', smokingBody()),
+        article('外籍乘客高铁车厢探头抽烟 铁路部门通报', '2026-11-13T00:00:00Z', smokingBody())
+    ], query, NOW);
+    assert.strictEqual(selected.articles.length, 2);
+    assert.strictEqual(selected.sufficient, true);
+    assert.deepStrictEqual(selected.articles.map((item) => item.title), [
+        '官方通报外国人高铁上探头吸烟',
+        '外籍乘客高铁车厢探头抽烟 铁路部门通报'
+    ]);
+}
+
+function testSameDomainDifferentEventRejected() {
+    const query = '官方通报外国人高铁上探头吸烟';
+    const fight = '铁路部门通报，一名外国人在高铁上与邻座发生肢体冲突，乘警已到场处置，车厢秩序已经恢复。'.repeat(4);
+    const looking = '有乘客拍摄到外国人在高铁上探头张望，沿途风景引发讨论，列车并未停车，也没有吸烟情节。'.repeat(4);
+    const selected = selectArticles([
+        article('外国人在高铁上打架，铁路部门通报', '2026-11-13T00:00:00Z', fight),
+        article('外国人高铁上探头张望引围观', '2026-11-13T00:00:00Z', looking)
+    ], query, NOW);
+    assert.strictEqual(selected.articles.length, 0);
+    assert.deepStrictEqual(selected.dropped.map((item) => item.reason), ['title', 'title']);
+}
+
+function testRelevantBodyRequiredForRewrite() {
+    const query = '官方通报外国人高铁上探头吸烟';
+    const otherEvent = '铁路部门通报，一名外国人在高铁上与邻座发生肢体冲突，乘警已到场处置，车厢秩序已经恢复。'.repeat(4);
+    const selected = selectArticles([
+        article('外籍乘客高铁车厢探头抽烟 铁路部门通报', '2026-11-13T00:00:00Z', otherEvent)
+    ], query, NOW);
+    assert.strictEqual(selected.articles.length, 0);
+    assert.strictEqual(selected.dropped[0].reason, 'body');
+}
+
+function testSmokingStaleShortAndEmptyStillRejected() {
+    const query = '官方通报外国人高铁上探头吸烟';
+    const selected = selectArticles([
+        article(query, '2026-05-01T00:00:00Z', smokingBody()),
+        article(query, '2026-11-13T00:00:00Z', '探头吸烟。'),
+        article(query, '2026-11-13T00:00:00Z', '')
+    ], query, NOW);
+    assert.deepStrictEqual(selected.dropped.map((item) => item.reason), ['stale', 'short', 'short']);
+}
+
+function testMockSearchKeepsRewriteAndDropsOtherEvent() {
+    const query = '官方通报外国人高铁上探头吸烟';
+    let calls = 0;
+    return requestDeepseekSearch({
+        query,
+        apiKey: 'test-key',
+        nowMs: NOW,
+        httpPost() {
+            calls += 1;
+            return Promise.resolve({
+                status: 200,
+                data: {
+                    results: [
+                        article('外籍乘客高铁车厢探头抽烟 铁路部门通报', '2026-11-13T00:00:00Z', smokingBody()),
+                        article('外国人在高铁上打架，铁路部门通报', '2026-11-13T00:00:00Z', '铁路部门通报，一名外国人在高铁上与邻座发生肢体冲突，乘警已到场处置。'.repeat(4))
+                    ]
+                }
+            });
+        }
+    }).then((result) => {
+        assert.strictEqual(calls, 1);
+        assert.strictEqual(result.ok, true);
+        assert.strictEqual(result.sufficient, true);
+        assert.strictEqual(result.articles.length, 1);
+        assert.strictEqual(result.articles[0].title, '外籍乘客高铁车厢探头抽烟 铁路部门通报');
+        assert.strictEqual(result.articles[0].link.startsWith('https://'), true);
+        assert.ok(!result.merged.includes('肢体冲突'));
+    });
+}
+
 function testNavigationOverlapDoesNotCount() {
     const headline = '官方通报外国人高铁上探头吸烟';
     const selected = selectArticles([
@@ -361,6 +442,11 @@ Promise.resolve()
     .then(() => testRequestShapeAndNoRetry())
     .then(() => testStatuses())
     .then(() => testEmptyIsNotCachedAndCacheHitSkipsCall())
+    .then(() => testSyntheticRewritePasses())
+    .then(() => testSameDomainDifferentEventRejected())
+    .then(() => testRelevantBodyRequiredForRewrite())
+    .then(() => testSmokingStaleShortAndEmptyStillRejected())
+    .then(() => testMockSearchKeepsRewriteAndDropsOtherEvent())
     .then(() => testNavigationOverlapDoesNotCount())
     .then(() => testBeijingDayBoundaryKeepsFreshAndDropsStale())
     .then(() => testFilteredNonemptyDoesNotRepayUntilExpiry())
